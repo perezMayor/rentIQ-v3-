@@ -1,4 +1,5 @@
 import { buildSimplePdf } from "@/lib/pdf";
+import { getCompanyLogoDataUrl, getCompanyPrimaryColor, getDocumentCompanyName } from "@/lib/company-brand";
 import type { Contract, TemplateDocument } from "@/lib/domain/rental";
 import { readRentalData } from "@/lib/services/rental-store";
 
@@ -65,11 +66,20 @@ export async function buildContractDocument(contractId: string): Promise<Contrac
     data.templates.find((template) => template.templateType === "CONTRATO" && template.language === "es" && template.active) ??
     null;
   const templateHtml = templateUsed?.htmlContent || getDefaultContractTemplate();
+  const documentCompanyName = getDocumentCompanyName(data.companySettings);
 
   const renderedHtml = renderTemplate(templateHtml, {
-    company_name: data.companySettings.companyName,
+    company_name: documentCompanyName,
+    company_document_name: documentCompanyName,
     company_tax_id: data.companySettings.taxId,
     company_fiscal_address: data.companySettings.fiscalAddress,
+    company_email_from: data.companySettings.companyEmailFrom,
+    company_phone: data.companySettings.companyPhone,
+    company_website: data.companySettings.companyWebsite,
+    company_document_footer: data.companySettings.documentFooter,
+    company_logo_data_url: data.companySettings.logoDataUrl,
+    company_brand_primary_color: data.companySettings.brandPrimaryColor,
+    company_brand_secondary_color: data.companySettings.brandSecondaryColor,
     contract_number: contract.contractNumber,
     customer_name: contract.customerName || "N/D",
     company_customer_name: contract.companyName || "N/D",
@@ -94,6 +104,12 @@ export async function buildContractDocument(contractId: string): Promise<Contrac
   const pdf = await buildSimplePdf({
     title: `Contrato ${contract.contractNumber}`,
     subtitle: `Plantilla: ${templateUsed?.templateCode ?? "DEFAULT"} | Idioma: ${language}`,
+    companyName: documentCompanyName,
+    companyTaxId: data.companySettings.taxId,
+    companyAddress: data.companySettings.fiscalAddress,
+    companyFooter: data.companySettings.documentFooter,
+    logoDataUrl: getCompanyLogoDataUrl(data.companySettings),
+    accentColor: getCompanyPrimaryColor(data.companySettings),
     sections: [
       {
         title: "Contenido renderizado",

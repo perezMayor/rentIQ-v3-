@@ -406,9 +406,17 @@ export type UserAccount = {
 // Configuración global de empresa (fiscal, series y sucursales).
 export type CompanySettings = {
   companyName: string;
+  legalName: string;
+  documentBrandName: string;
   companyEmailFrom: string;
+  companyPhone: string;
+  companyWebsite: string;
   taxId: string;
   fiscalAddress: string;
+  documentFooter: string;
+  logoDataUrl: string;
+  brandPrimaryColor: string;
+  brandSecondaryColor: string;
   defaultIvaPercent: number;
   salesChannels: string[];
   providers: string[];

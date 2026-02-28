@@ -1,4 +1,5 @@
 import { buildSimplePdf } from "@/lib/pdf";
+import { getCompanyLogoDataUrl, getCompanyPrimaryColor, getDocumentCompanyName } from "@/lib/company-brand";
 import type { Invoice, TemplateDocument } from "@/lib/domain/rental";
 import { readRentalData } from "@/lib/services/rental-store";
 
@@ -72,11 +73,20 @@ export async function buildInvoiceDocument(invoiceId: string): Promise<InvoiceDo
     null;
 
   const templateHtml = templateUsed?.htmlContent || getDefaultInvoiceTemplate();
+  const documentCompanyName = getDocumentCompanyName(data.companySettings);
   // Render final del HTML con datos numéricos y fiscales ya normalizados.
   const renderedHtml = renderTemplate(templateHtml, {
-    company_name: data.companySettings.companyName,
+    company_name: documentCompanyName,
+    company_document_name: documentCompanyName,
     company_tax_id: data.companySettings.taxId,
     company_fiscal_address: data.companySettings.fiscalAddress,
+    company_email_from: data.companySettings.companyEmailFrom,
+    company_phone: data.companySettings.companyPhone,
+    company_website: data.companySettings.companyWebsite,
+    company_document_footer: data.companySettings.documentFooter,
+    company_logo_data_url: data.companySettings.logoDataUrl,
+    company_brand_primary_color: data.companySettings.brandPrimaryColor,
+    company_brand_secondary_color: data.companySettings.brandSecondaryColor,
     invoice_number: invoice.invoiceNumber,
     invoice_name: invoice.invoiceName,
     issued_at: invoice.issuedAt,
@@ -95,6 +105,12 @@ export async function buildInvoiceDocument(invoiceId: string): Promise<InvoiceDo
   const pdf = await buildSimplePdf({
     title: `${invoice.invoiceNumber} - ${invoice.invoiceName}`,
     subtitle: `Plantilla: ${templateUsed?.templateCode ?? "DEFAULT"} | Idioma: ${language}`,
+    companyName: documentCompanyName,
+    companyTaxId: data.companySettings.taxId,
+    companyAddress: data.companySettings.fiscalAddress,
+    companyFooter: data.companySettings.documentFooter,
+    logoDataUrl: getCompanyLogoDataUrl(data.companySettings),
+    accentColor: getCompanyPrimaryColor(data.companySettings),
     sections: [
       {
         title: "Contenido renderizado",

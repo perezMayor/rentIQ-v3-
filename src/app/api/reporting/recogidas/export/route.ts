@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
+import { getCompanyLogoDataUrl, getCompanyPrimaryColor, getDocumentCompanyName } from "@/lib/company-brand";
 import { buildSimplePdf } from "@/lib/pdf";
-import { listPickups } from "@/lib/services/rental-service";
+import { getCompanySettings, listPickups } from "@/lib/services/rental-service";
 
 export async function GET(request: Request) {
   // Endpoint protegido: requiere sesión.
@@ -17,11 +18,18 @@ export async function GET(request: Request) {
   const branch = url.searchParams.get("branch") ?? "";
 
   const data = await listPickups({ from: `${from}T00:00:00`, to: `${to}T23:59:59`, branch });
+  const settings = await getCompanySettings();
 
   // Exporta dos bloques: con contrato y pendientes/sin matrícula.
   const pdf = await buildSimplePdf({
     title: "Listado Recogidas",
     subtitle: `Rango ${from} a ${to} | Sucursal filtro: ${branch || "Todas"}`,
+    companyName: getDocumentCompanyName(settings),
+    companyTaxId: settings.taxId,
+    companyAddress: settings.fiscalAddress,
+    companyFooter: settings.documentFooter,
+    logoDataUrl: getCompanyLogoDataUrl(settings),
+    accentColor: getCompanyPrimaryColor(settings),
     sections: [
       {
         title: "Con contrato generado",

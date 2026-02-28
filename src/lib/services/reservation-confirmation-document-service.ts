@@ -1,4 +1,5 @@
 import type { Reservation, TemplateDocument } from "@/lib/domain/rental";
+import { getDocumentCompanyName } from "@/lib/company-brand";
 import { readRentalData } from "@/lib/services/rental-store";
 
 type ReservationConfirmationDocument = {
@@ -54,8 +55,19 @@ export async function buildReservationConfirmationDocument(
     null;
 
   const templateHtml = templateUsed?.htmlContent || getDefaultReservationConfirmationTemplate();
+  const documentCompanyName = getDocumentCompanyName(data.companySettings);
   const renderedHtml = renderTemplate(templateHtml, {
-    company_name: data.companySettings.companyName,
+    company_name: documentCompanyName,
+    company_document_name: documentCompanyName,
+    company_tax_id: data.companySettings.taxId,
+    company_fiscal_address: data.companySettings.fiscalAddress,
+    company_email_from: data.companySettings.companyEmailFrom,
+    company_phone: data.companySettings.companyPhone,
+    company_website: data.companySettings.companyWebsite,
+    company_document_footer: data.companySettings.documentFooter,
+    company_logo_data_url: data.companySettings.logoDataUrl,
+    company_brand_primary_color: data.companySettings.brandPrimaryColor,
+    company_brand_secondary_color: data.companySettings.brandSecondaryColor,
     reservation_number: reservation.reservationNumber,
     customer_name: customerName,
     delivery_at: reservation.deliveryAt || "N/D",

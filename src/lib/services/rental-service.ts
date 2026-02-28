@@ -1,4 +1,5 @@
 import { appendAuditEvent, readAuditEventsByContract, readAuditEventsByReservation } from "@/lib/audit";
+import { getDocumentCompanyName } from "@/lib/company-brand";
 import { sendMailFromCompany } from "@/lib/mail";
 import type {
   Client,
@@ -16,6 +17,7 @@ import type {
   VehicleTask,
   VehicleModel,
   VehicleExtra,
+  UserAccount,
 } from "@/lib/domain/rental";
 import { readRentalData, writeRentalData } from "@/lib/services/rental-store";
 
@@ -667,10 +669,12 @@ export async function getCompanySettings() {
 
 export async function updateCompanySettings(input: Record<string, string>, actor: { id: string; role: RoleName }) {
   const data = await readRentalData();
+  const has = (key: string) => Object.prototype.hasOwnProperty.call(input, key);
+  const current = data.companySettings;
 
-  const branchesRaw = (input.branchesRaw ?? "").trim();
-  const branches = branchesRaw
-    ? branchesRaw
+  const branches = has("branchesRaw")
+    ? (input.branchesRaw ?? "")
+        .trim()
         .split("\n")
         .map((line) => line.trim())
         .filter(Boolean)
@@ -681,33 +685,56 @@ export async function updateCompanySettings(input: Record<string, string>, actor
             name: rest.join("|").trim() || "N/D",
           };
         })
-    : [];
-  const providersRaw = (input.providersRaw ?? "").trim();
-  const providers = providersRaw
+    : (current.branches ?? []);
+  const providers = has("providersRaw")
     ? Array.from(
         new Set(
-          providersRaw
+          (input.providersRaw ?? "")
+            .trim()
             .split("\n")
             .map((line) => normalizeOwnerName(line))
             .filter(Boolean),
         ),
       )
-    : (data.companySettings.providers ?? []);
+    : (current.providers ?? []);
+  const normalizeHex = (value: string, fallback: string) => {
+    const cleaned = value.trim();
+    return /^#[0-9a-fA-F]{6}$/.test(cleaned) ? cleaned : fallback;
+  };
+  const nextCompanyName = has("companyName") ? ((input.companyName ?? "N/D").trim() || "N/D") : current.companyName;
 
   data.companySettings = {
-    companyName: (input.companyName ?? "N/D").trim() || "N/D",
-    companyEmailFrom: (input.companyEmailFrom ?? "N/D").trim() || "N/D",
-    taxId: (input.taxId ?? "N/D").trim() || "N/D",
-    fiscalAddress: (input.fiscalAddress ?? "N/D").trim() || "N/D",
-    defaultIvaPercent: parseNumber(input.defaultIvaPercent ?? String(data.companySettings.defaultIvaPercent)),
-    salesChannels: data.companySettings.salesChannels ?? [],
+    companyName: nextCompanyName,
+    legalName: has("legalName") ? ((input.legalName ?? "N/D").trim() || "N/D") : current.legalName,
+    documentBrandName: has("documentBrandName")
+      ? ((input.documentBrandName ?? "").trim() || nextCompanyName)
+      : (current.documentBrandName || nextCompanyName),
+    companyEmailFrom: has("companyEmailFrom") ? ((input.companyEmailFrom ?? "N/D").trim() || "N/D") : current.companyEmailFrom,
+    companyPhone: has("companyPhone") ? ((input.companyPhone ?? "N/D").trim() || "N/D") : current.companyPhone,
+    companyWebsite: has("companyWebsite") ? ((input.companyWebsite ?? "N/D").trim() || "N/D") : current.companyWebsite,
+    taxId: has("taxId") ? ((input.taxId ?? "N/D").trim() || "N/D") : current.taxId,
+    fiscalAddress: has("fiscalAddress") ? ((input.fiscalAddress ?? "N/D").trim() || "N/D") : current.fiscalAddress,
+    documentFooter: has("documentFooter") ? (input.documentFooter ?? "").trim() : (current.documentFooter ?? ""),
+    logoDataUrl: has("logoDataUrl") ? (input.logoDataUrl ?? "").trim() : (current.logoDataUrl ?? ""),
+    brandPrimaryColor: has("brandPrimaryColor")
+      ? normalizeHex(input.brandPrimaryColor ?? "", "#2563eb")
+      : normalizeHex(current.brandPrimaryColor ?? "", "#2563eb"),
+    brandSecondaryColor: has("brandSecondaryColor")
+      ? normalizeHex(input.brandSecondaryColor ?? "", "#0f172a")
+      : normalizeHex(current.brandSecondaryColor ?? "", "#0f172a"),
+    defaultIvaPercent: has("defaultIvaPercent")
+      ? parseNumber(input.defaultIvaPercent ?? String(current.defaultIvaPercent))
+      : current.defaultIvaPercent,
+    salesChannels: current.salesChannels ?? [],
     providers,
-    backupRetentionDays: Math.max(1, Math.floor(parseNumber(input.backupRetentionDays ?? String(data.companySettings.backupRetentionDays ?? 90)))),
+    backupRetentionDays: has("backupRetentionDays")
+      ? Math.max(1, Math.floor(parseNumber(input.backupRetentionDays ?? String(current.backupRetentionDays ?? 90))))
+      : Math.max(1, Math.floor(parseNumber(String(current.backupRetentionDays ?? 90)))),
     invoiceSeriesByType: {
-      F: normalizeInvoiceSeries(input.invoiceSeriesF ?? data.companySettings.invoiceSeriesByType.F, "F"),
-      R: normalizeInvoiceSeries(input.invoiceSeriesR ?? data.companySettings.invoiceSeriesByType.R, "R"),
-      V: normalizeInvoiceSeries(input.invoiceSeriesV ?? data.companySettings.invoiceSeriesByType.V, "V"),
-      A: normalizeInvoiceSeries(input.invoiceSeriesA ?? data.companySettings.invoiceSeriesByType.A, "A"),
+      F: has("invoiceSeriesF") ? normalizeInvoiceSeries(input.invoiceSeriesF ?? current.invoiceSeriesByType.F, "F") : current.invoiceSeriesByType.F,
+      R: has("invoiceSeriesR") ? normalizeInvoiceSeries(input.invoiceSeriesR ?? current.invoiceSeriesByType.R, "R") : current.invoiceSeriesByType.R,
+      V: has("invoiceSeriesV") ? normalizeInvoiceSeries(input.invoiceSeriesV ?? current.invoiceSeriesByType.V, "V") : current.invoiceSeriesByType.V,
+      A: has("invoiceSeriesA") ? normalizeInvoiceSeries(input.invoiceSeriesA ?? current.invoiceSeriesByType.A, "A") : current.invoiceSeriesByType.A,
     },
     branches,
     contractNumberPattern: "aa-sucursal-numero",
@@ -725,6 +752,143 @@ export async function updateCompanySettings(input: Record<string, string>, actor
     entity: "company_settings",
     entityId: "default",
     details: { updatedBy: actor.id, branches: data.companySettings.branches.length },
+  });
+}
+
+// -------------------- Usuarios --------------------
+function normalizeUserRole(input: string): RoleName {
+  const role = input.trim().toUpperCase();
+  if (role === "SUPER_ADMIN" || role === "ADMIN" || role === "LECTOR") {
+    return role;
+  }
+  return "LECTOR";
+}
+
+function normalizeUserEmail(input: string): string {
+  return input.trim().toLowerCase();
+}
+
+export async function listUserAccounts(query = ""): Promise<UserAccount[]> {
+  const data = await readRentalData();
+  const q = query.trim().toLowerCase();
+  const rows = data.users
+    .toSorted((a, b) => a.name.localeCompare(b.name))
+    .map((item) => ({
+      ...item,
+      password: "",
+    }));
+  if (!q) return rows;
+  return rows.filter((item) => [item.name, item.email, item.role].join(" ").toLowerCase().includes(q));
+}
+
+export async function createUserAccount(input: Record<string, string>, actor: { id: string; role: RoleName }) {
+  const data = await readRentalData();
+  const email = normalizeUserEmail(input.email ?? "");
+  const name = (input.name ?? "").trim();
+  const password = (input.password ?? "").trim();
+  const role = normalizeUserRole(input.role ?? "LECTOR");
+  const active = String(input.active ?? "true") !== "false";
+
+  if (!name) throw new Error("Nombre obligatorio");
+  if (!email || !email.includes("@")) throw new Error("Email inválido");
+  if (!password) throw new Error("Password obligatorio");
+  if (data.users.some((item) => normalizeUserEmail(item.email) === email)) {
+    throw new Error("Ya existe un usuario con ese email");
+  }
+
+  const now = new Date().toISOString();
+  const created: UserAccount = {
+    id: `usr-${String(data.users.length + 1).padStart(4, "0")}`,
+    name,
+    email,
+    password,
+    role,
+    active,
+    createdAt: now,
+    createdBy: actor.id,
+    updatedAt: now,
+    updatedBy: actor.id,
+  };
+  data.users.push(created);
+  await writeRentalData(data);
+  await appendAuditEvent({
+    timestamp: now,
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "user_account",
+    entityId: created.id,
+    details: { mode: "CREATE", email: created.email, role: created.role, active: created.active },
+  });
+}
+
+export async function updateUserAccount(userId: string, input: Record<string, string>, actor: { id: string; role: RoleName }) {
+  const data = await readRentalData();
+  const user = data.users.find((item) => item.id === userId);
+  if (!user) throw new Error("Usuario no encontrado");
+
+  const nextEmail = normalizeUserEmail(input.email ?? user.email);
+  if (!nextEmail || !nextEmail.includes("@")) throw new Error("Email inválido");
+  if (data.users.some((item) => item.id !== userId && normalizeUserEmail(item.email) === nextEmail)) {
+    throw new Error("Ya existe un usuario con ese email");
+  }
+
+  user.name = (input.name ?? user.name).trim() || user.name;
+  user.email = nextEmail;
+  user.role = normalizeUserRole(input.role ?? user.role);
+  const nextPassword = (input.password ?? "").trim();
+  if (nextPassword) user.password = nextPassword;
+  if (Object.prototype.hasOwnProperty.call(input, "active")) {
+    user.active = String(input.active ?? "true") !== "false";
+  }
+  user.updatedAt = new Date().toISOString();
+  user.updatedBy = actor.id;
+
+  await writeRentalData(data);
+  await appendAuditEvent({
+    timestamp: user.updatedAt,
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "user_account",
+    entityId: user.id,
+    details: { mode: "UPDATE", email: user.email, role: user.role, active: user.active },
+  });
+}
+
+export async function setUserAccountActive(userId: string, active: boolean, actor: { id: string; role: RoleName }) {
+  const data = await readRentalData();
+  const user = data.users.find((item) => item.id === userId);
+  if (!user) throw new Error("Usuario no encontrado");
+  user.active = active;
+  user.updatedAt = new Date().toISOString();
+  user.updatedBy = actor.id;
+  await writeRentalData(data);
+  await appendAuditEvent({
+    timestamp: user.updatedAt,
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "user_account",
+    entityId: user.id,
+    details: { mode: active ? "ACTIVATE" : "DEACTIVATE", email: user.email },
+  });
+}
+
+export async function deleteUserAccount(userId: string, actor: { id: string; role: RoleName }) {
+  const data = await readRentalData();
+  const user = data.users.find((item) => item.id === userId);
+  if (!user) throw new Error("Usuario no encontrado");
+  data.users = data.users.filter((item) => item.id !== userId);
+  await writeRentalData(data);
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "user_account",
+    entityId: userId,
+    details: { mode: "DELETE", email: user.email, role: user.role },
   });
 }
 
@@ -1573,7 +1737,7 @@ function renderSimpleTemplate(template: string, data: Record<string, string>) {
 
 function buildReservationConfirmationHtml(
   reservation: Reservation,
-  input?: { companyName?: string; templateHtml?: string },
+  input?: { companyName?: string; templateHtml?: string; taxId?: string; fiscalAddress?: string; logoDataUrl?: string },
 ): string {
   const fallback = `
     <html>
@@ -1593,6 +1757,10 @@ function buildReservationConfirmationHtml(
   }
   return renderSimpleTemplate(input.templateHtml, {
     company_name: input.companyName || "N/D",
+    company_document_name: input.companyName || "N/D",
+    company_tax_id: input.taxId || "N/D",
+    company_fiscal_address: input.fiscalAddress || "N/D",
+    company_logo_data_url: input.logoDataUrl || "",
     reservation_number: reservation.reservationNumber,
     customer_name: reservation.customerName || "N/D",
     delivery_at: reservation.deliveryAt || "N/D",
@@ -1632,7 +1800,10 @@ export async function sendReservationConfirmation(
       to: toEmail,
       subject: `Confirmacion reserva ${reservation.reservationNumber}`,
       html: buildReservationConfirmationHtml(reservation, {
-        companyName: data.companySettings.companyName,
+        companyName: getDocumentCompanyName(data.companySettings),
+        taxId: data.companySettings.taxId,
+        fiscalAddress: data.companySettings.fiscalAddress,
+        logoDataUrl: data.companySettings.logoDataUrl,
         templateHtml,
       }),
     });

@@ -1,3 +1,4 @@
+import { getDocumentCompanyName } from "@/lib/company-brand";
 import type { TemplateDocument } from "@/lib/domain/rental";
 import { readRentalData } from "@/lib/services/rental-store";
 
@@ -14,11 +15,27 @@ export async function buildContractPreprintDocument(language = "es"): Promise<Co
     data.templates.find((template) => template.templateType === "CONTRATO" && template.language === "es" && template.active) ??
     null;
 
+  const companyName = getDocumentCompanyName(data.companySettings);
+  const render = (template: string) =>
+    template.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_full, key: string) => {
+      const map: Record<string, string> = {
+        company_name: companyName,
+        company_document_name: companyName,
+        company_tax_id: data.companySettings.taxId,
+        company_fiscal_address: data.companySettings.fiscalAddress,
+        company_phone: data.companySettings.companyPhone,
+        company_website: data.companySettings.companyWebsite,
+      };
+      return map[key] ?? "";
+    });
+
   const html =
-    templateUsed?.htmlContent ||
+    render(templateUsed?.htmlContent || "") ||
     `
       <section style="font-family:Segoe UI, Arial, sans-serif; color:#111827;">
-        <h1>Contrato en blanco</h1>
+        <h1>${companyName}</h1>
+        <p>${data.companySettings.taxId} · ${data.companySettings.fiscalAddress}</p>
+        <h2>Contrato en blanco</h2>
         <h3>Datos cliente</h3>
         <p>Nombre / Razón social: ________________________</p>
         <p>Documento: ________________________</p>
