@@ -2,31 +2,35 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getSessionUser } from "@/lib/auth";
 import { createFullBackup, listBackups, restoreBackup } from "@/lib/services/backup-service";
-import { verifySmtpConnection } from "@/lib/mail";
 import {
+  createUserAccount,
   createDailyOperationalExpense,
   createTariffPlan,
   createTemplate,
+  deleteUserAccount,
   deleteInternalExpense,
   deleteTariffBracket,
   deleteTariffPlan,
   deleteTemplate,
   getCompanySettings,
+  listUserAccounts,
   listActiveRentalPlatesByDate,
   listDailyOperationalExpenses,
   listTariffCatalog,
   listTariffPlans,
   listTemplates,
+  setUserAccountActive,
   updateCompanySettings,
   updateInternalExpense,
   updateTariffPlan,
+  updateUserAccount,
   updateTemplate,
   upsertTariffBracket,
   upsertTariffPrice,
   validateDailyOperationalExpenses,
 } from "@/lib/services/rental-service";
 
-type GestorTab = "empresa" | "sucursales" | "tarifas" | "gastos" | "plantillas" | "backups";
+type GestorTab = "usuarios" | "sucursales" | "tarifas" | "gastos" | "plantillas" | "backups";
 
 type Props = {
   searchParams: Promise<{
@@ -43,14 +47,15 @@ type Props = {
     worker?: string;
     expenseDate?: string;
     qTemplate?: string;
+    qUser?: string;
   }>;
 };
 
 function normalizeTab(value: string): GestorTab {
-  if (value === "sucursales" || value === "tarifas" || value === "gastos" || value === "plantillas" || value === "backups") {
+  if (value === "usuarios" || value === "sucursales" || value === "tarifas" || value === "gastos" || value === "plantillas" || value === "backups") {
     return value;
   }
-  return "empresa";
+  return "usuarios";
 }
 
 function getDefaultRange() {
@@ -66,7 +71,7 @@ export default async function GestorPage({ searchParams }: Props) {
   if (user.role === "LECTOR") redirect("/dashboard");
 
   const params = await searchParams;
-  const tab = normalizeTab((params.tab ?? "empresa").toLowerCase());
+  const tab = normalizeTab((params.tab ?? "usuarios").toLowerCase());
   const isSuperAdmin = user.role === "SUPER_ADMIN";
 
   const settings = await getCompanySettings();
@@ -102,41 +107,91 @@ export default async function GestorPage({ searchParams }: Props) {
 
   const qTemplate = params.qTemplate ?? "";
   const templates = await listTemplates(qTemplate);
+  const qUser = params.qUser ?? "";
+  const users = await listUserAccounts(qUser);
 
   async function saveCompanySettingsAction(formData: FormData) {
     "use server";
     const actor = await getSessionUser();
     if (!actor) redirect("/login");
-    if (actor.role === "LECTOR") redirect("/gestor?tab=empresa&error=Permiso+denegado");
+    if (actor.role === "LECTOR") redirect("/gestor?tab=sucursales&error=Permiso+denegado");
     try {
       await updateCompanySettings(Object.fromEntries(formData.entries()) as Record<string, string>, {
         id: actor.id,
         role: actor.role,
       });
       revalidatePath("/gestor");
-      redirect("/gestor?tab=empresa&ok=Configuracion+guardada");
+      redirect("/gestor?tab=sucursales&ok=Sucursales+guardadas");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Error guardando configuración";
-      redirect(`/gestor?tab=empresa&error=${encodeURIComponent(message)}`);
+      redirect(`/gestor?tab=sucursales&error=${encodeURIComponent(message)}`);
     }
   }
 
-  async function testSmtpAction(formData: FormData) {
+  async function createUserAction(formData: FormData) {
     "use server";
     const actor = await getSessionUser();
     if (!actor) redirect("/login");
-    if (actor.role === "LECTOR") redirect("/gestor?tab=empresa&error=Permiso+denegado");
-    const toEmail = String(formData.get("smtpTestTo") ?? "").trim();
+    if (actor.role === "LECTOR") redirect("/gestor?tab=usuarios&error=Permiso+denegado");
     try {
-      await verifySmtpConnection({
-        fromOverride: settings.companyEmailFrom !== "N/D" ? settings.companyEmailFrom : undefined,
-        to: toEmail || undefined,
+      await createUserAccount(Object.fromEntries(formData.entries()) as Record<string, string>, { id: actor.id, role: actor.role });
+      revalidatePath("/gestor");
+      redirect(`/gestor?tab=usuarios&qUser=${encodeURIComponent(qUser)}&ok=Usuario+creado`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Error creando usuario";
+      redirect(`/gestor?tab=usuarios&qUser=${encodeURIComponent(qUser)}&error=${encodeURIComponent(message)}`);
+    }
+  }
+
+  async function updateUserAction(formData: FormData) {
+    "use server";
+    const actor = await getSessionUser();
+    if (!actor) redirect("/login");
+    if (actor.role === "LECTOR") redirect("/gestor?tab=usuarios&error=Permiso+denegado");
+    const userId = String(formData.get("userId") ?? "");
+    try {
+      await updateUserAccount(userId, Object.fromEntries(formData.entries()) as Record<string, string>, {
+        id: actor.id,
+        role: actor.role,
       });
       revalidatePath("/gestor");
-      redirect("/gestor?tab=empresa&ok=SMTP+verificado");
+      redirect(`/gestor?tab=usuarios&qUser=${encodeURIComponent(qUser)}&ok=Usuario+actualizado`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error en prueba SMTP";
-      redirect(`/gestor?tab=empresa&error=${encodeURIComponent(message)}`);
+      const message = error instanceof Error ? error.message : "Error actualizando usuario";
+      redirect(`/gestor?tab=usuarios&qUser=${encodeURIComponent(qUser)}&error=${encodeURIComponent(message)}`);
+    }
+  }
+
+  async function setUserStatusAction(formData: FormData) {
+    "use server";
+    const actor = await getSessionUser();
+    if (!actor) redirect("/login");
+    if (actor.role === "LECTOR") redirect("/gestor?tab=usuarios&error=Permiso+denegado");
+    const userId = String(formData.get("userId") ?? "");
+    const active = String(formData.get("active") ?? "false") === "true";
+    try {
+      await setUserAccountActive(userId, active, { id: actor.id, role: actor.role });
+      revalidatePath("/gestor");
+      redirect(`/gestor?tab=usuarios&qUser=${encodeURIComponent(qUser)}&ok=Estado+de+usuario+actualizado`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Error actualizando estado";
+      redirect(`/gestor?tab=usuarios&qUser=${encodeURIComponent(qUser)}&error=${encodeURIComponent(message)}`);
+    }
+  }
+
+  async function deleteUserAction(formData: FormData) {
+    "use server";
+    const actor = await getSessionUser();
+    if (!actor) redirect("/login");
+    if (actor.role === "LECTOR") redirect("/gestor?tab=usuarios&error=Permiso+denegado");
+    const userId = String(formData.get("userId") ?? "");
+    try {
+      await deleteUserAccount(userId, { id: actor.id, role: actor.role });
+      revalidatePath("/gestor");
+      redirect(`/gestor?tab=usuarios&qUser=${encodeURIComponent(qUser)}&ok=Usuario+borrado`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Error borrando usuario";
+      redirect(`/gestor?tab=usuarios&qUser=${encodeURIComponent(qUser)}&error=${encodeURIComponent(message)}`);
     }
   }
 
@@ -410,7 +465,7 @@ export default async function GestorPage({ searchParams }: Props) {
 
       <section className="card stack-sm">
         <div className="inline-actions-cell">
-          <a className={tab === "empresa" ? "primary-btn text-center" : "secondary-btn text-center"} href="/gestor?tab=empresa">Empresa</a>
+          <a className={tab === "usuarios" ? "primary-btn text-center" : "secondary-btn text-center"} href="/gestor?tab=usuarios">Usuarios</a>
           <a className={tab === "sucursales" ? "primary-btn text-center" : "secondary-btn text-center"} href="/gestor?tab=sucursales">Sucursales</a>
           <a className={tab === "tarifas" ? "primary-btn text-center" : "secondary-btn text-center"} href="/gestor?tab=tarifas">Tarifas</a>
           <a className={tab === "gastos" ? "primary-btn text-center" : "secondary-btn text-center"} href="/gestor?tab=gastos">Gastos</a>
@@ -419,67 +474,99 @@ export default async function GestorPage({ searchParams }: Props) {
         </div>
       </section>
 
-      {tab === "empresa" ? (
+      {tab === "usuarios" ? (
         <>
-          <section className="card stack-md">
-            <h3>Configuración de empresa</h3>
-            <form action={saveCompanySettingsAction} className="form-grid">
+          <section className="card stack-sm">
+            <h3>Nuevo usuario</h3>
+            <form action={createUserAction} className="form-grid">
+              <label>Nombre<input name="name" required /></label>
+              <label>Email<input name="email" type="email" required /></label>
+              <label>Password<input name="password" type="password" required /></label>
               <label>
-                Nombre empresa
-                <input name="companyName" defaultValue={settings.companyName} />
-              </label>
-              <label>
-                Email emisor empresa
-                <input name="companyEmailFrom" type="email" defaultValue={settings.companyEmailFrom} />
-              </label>
-              <label>
-                CIF/NIF
-                <input name="taxId" defaultValue={settings.taxId} />
-              </label>
-              <label className="col-span-2">
-                Dirección fiscal
-                <input name="fiscalAddress" defaultValue={settings.fiscalAddress} />
+                Rol
+                <select name="role" defaultValue="LECTOR">
+                  <option value="SUPER_ADMIN">SUPER_ADMIN</option>
+                  <option value="ADMIN">ADMIN</option>
+                  <option value="LECTOR">LECTOR</option>
+                </select>
               </label>
               <label>
-                IVA por defecto (%)
-                <input name="defaultIvaPercent" type="number" step="0.01" defaultValue={settings.defaultIvaPercent} />
-              </label>
-              <label>
-                Retención backups (días)
-                <input name="backupRetentionDays" type="number" min={1} defaultValue={settings.backupRetentionDays} />
-              </label>
-              <label>
-                Serie Facturas alquiler (F)
-                <input name="invoiceSeriesF" defaultValue={settings.invoiceSeriesByType.F} />
-              </label>
-              <label>
-                Serie Rectificativas (R)
-                <input name="invoiceSeriesR" defaultValue={settings.invoiceSeriesByType.R} />
-              </label>
-              <label>
-                Serie Venta (V)
-                <input name="invoiceSeriesV" defaultValue={settings.invoiceSeriesByType.V} />
-              </label>
-              <label>
-                Serie Abonos (A)
-                <input name="invoiceSeriesA" defaultValue={settings.invoiceSeriesByType.A} />
-              </label>
-              <label className="col-span-2">
-                Proveedores/propietarios de coche (1 por línea)
-                <textarea name="providersRaw" rows={4} defaultValue={(settings.providers ?? []).join("\n")} />
+                Activo
+                <select name="active" defaultValue="true">
+                  <option value="true">Sí</option>
+                  <option value="false">No</option>
+                </select>
               </label>
               <div className="col-span-2">
-                <button className="primary-btn" type="submit">Guardar configuración</button>
+                <button className="primary-btn" type="submit">Crear usuario</button>
               </div>
             </form>
           </section>
 
           <section className="card stack-sm">
-            <h3>SMTP diagnóstico</h3>
-            <form action={testSmtpAction} className="inline-search">
-              <input name="smtpTestTo" type="email" placeholder="destino@dominio.com (opcional)" />
-              <button className="secondary-btn" type="submit">Probar SMTP</button>
-            </form>
+            <div className="table-header-row">
+              <h3>Listado de usuarios</h3>
+              <form method="GET" className="inline-search">
+                <input type="hidden" name="tab" value="usuarios" />
+                <input name="qUser" defaultValue={qUser} placeholder="nombre, email o rol..." />
+                <button className="secondary-btn" type="submit">Buscar</button>
+              </form>
+            </div>
+            <div className="table-wrap">
+              <table className="data-table">
+                <thead><tr><th>Nombre</th><th>Email</th><th>Rol</th><th>Activo</th><th>Acciones</th></tr></thead>
+                <tbody>
+                  {users.length === 0 ? (
+                    <tr><td colSpan={5} className="muted-text">Sin usuarios.</td></tr>
+                  ) : (
+                    users.map((item) => (
+                      <tr key={item.id}>
+                        <td>{item.name}</td>
+                        <td>{item.email}</td>
+                        <td>{item.role}</td>
+                        <td>{item.active ? "Sí" : "No"}</td>
+                        <td>
+                          <details>
+                            <summary>Editar / Estado / Borrar</summary>
+                            <form action={updateUserAction} className="mini-form">
+                              <input type="hidden" name="userId" value={item.id} />
+                              <label>Nombre<input name="name" defaultValue={item.name} /></label>
+                              <label>Email<input name="email" type="email" defaultValue={item.email} /></label>
+                              <label>
+                                Rol
+                                <select name="role" defaultValue={item.role}>
+                                  <option value="SUPER_ADMIN">SUPER_ADMIN</option>
+                                  <option value="ADMIN">ADMIN</option>
+                                  <option value="LECTOR">LECTOR</option>
+                                </select>
+                              </label>
+                              <label>Password nueva (opcional)<input name="password" type="password" placeholder="Solo si cambias" /></label>
+                              <label>
+                                Activo
+                                <select name="active" defaultValue={item.active ? "true" : "false"}>
+                                  <option value="true">Sí</option>
+                                  <option value="false">No</option>
+                                </select>
+                              </label>
+                              <button className="secondary-btn" type="submit">Guardar usuario</button>
+                            </form>
+                            <form action={setUserStatusAction} className="mini-form">
+                              <input type="hidden" name="userId" value={item.id} />
+                              <input type="hidden" name="active" value={item.active ? "false" : "true"} />
+                              <button className="secondary-btn" type="submit">{item.active ? "Desactivar" : "Activar"}</button>
+                            </form>
+                            <form action={deleteUserAction} className="mini-form">
+                              <input type="hidden" name="userId" value={item.id} />
+                              <button className="secondary-btn" type="submit">Borrar usuario</button>
+                            </form>
+                          </details>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
           </section>
         </>
       ) : null}

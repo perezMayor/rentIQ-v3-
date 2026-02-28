@@ -42,7 +42,7 @@ export default async function PanelLayout({ children }: { children: React.ReactN
         </div>
         <div className="sidebar-bottom stack-sm">
           <Link href="/configuracion" className="secondary-btn text-center">
-            Configuración
+            Configuración de la empresa
           </Link>
           <LogoutButton />
         </div>
