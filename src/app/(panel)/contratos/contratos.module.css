@@ -1,0 +1,81 @@
+.contractsRoot {
+  --contract-compact-font: 0.82rem;
+}
+
+.contractsRoot :global(.card) {
+  padding: 0.8rem;
+}
+
+.contractsRoot :global(.stack-sm) {
+  gap: 0.55rem;
+}
+
+.contractsRoot :global(.stack-md) {
+  gap: 0.7rem;
+}
+
+.contractsRoot :global(.inline-actions-cell) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.contractsRoot :global(.inline-actions-cell a) {
+  font-size: var(--contract-compact-font);
+  padding: 0.38rem 0.55rem;
+  line-height: 1.2;
+}
+
+.contractsRoot :global(.mini-form) {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 0.45rem;
+  align-items: center;
+}
+
+.contractsRoot :global(.mini-form input),
+.contractsRoot :global(.mini-form select),
+.contractsRoot :global(.mini-form button),
+.contractsRoot :global(.inline-search input),
+.contractsRoot :global(.inline-search select),
+.contractsRoot :global(.inline-search button) {
+  min-height: 32px;
+  font-size: var(--contract-compact-font);
+  padding: 0.25rem 0.45rem;
+}
+
+.contractsRoot :global(.inline-search) {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.45rem;
+  width: 100%;
+}
+
+.contractsRoot :global(.table-wrap) {
+  overflow: auto;
+}
+
+.contractsRoot :global(.data-table th),
+.contractsRoot :global(.data-table td) {
+  font-size: 0.8rem;
+  padding: 0.36rem 0.4rem;
+}
+
+.contractsRoot :global(details summary) {
+  font-size: 0.84rem;
+  cursor: pointer;
+}
+
+.contractsRoot :global(h3) {
+  font-size: 1rem;
+  margin: 0;
+}
+
+.contractsRoot :global(h4) {
+  font-size: 0.92rem;
+  margin: 0;
+}
+
+.contractsRoot :global(.muted-text) {
+  font-size: 0.78rem;
+}

@@ -1,0 +1,346 @@
+import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
+import { appendAuditEvent } from "@/lib/audit";
+import { getSessionUser } from "@/lib/auth";
+import {
+  createTariffPlan,
+  deleteTariffBracket,
+  deleteTariffPlan,
+  listTariffCatalog,
+  listTariffPlans,
+  updateTariffPlan,
+  upsertTariffBracket,
+  upsertTariffPrice,
+} from "@/lib/services/rental-service";
+
+type Props = {
+  searchParams: Promise<{ q?: string; tariffPlanId?: string; error?: string }>;
+};
+
+export default async function TarifasPage({ searchParams }: Props) {
+  const user = await getSessionUser();
+  if (!user) {
+    redirect("/login");
+  }
+
+  if (user.role === "LECTOR") {
+    await appendAuditEvent({
+      timestamp: new Date().toISOString(),
+      action: "RBAC_DENIED",
+      actorId: user.id,
+      actorRole: user.role,
+      entity: "module",
+      entityId: "tarifas",
+    });
+    redirect("/dashboard");
+  }
+
+  const params = await searchParams;
+  const q = params.q ?? "";
+  const plans = await listTariffPlans(q);
+  const tariffPlanId = params.tariffPlanId ?? plans[0]?.id ?? "";
+  const catalog = tariffPlanId ? await listTariffCatalog(tariffPlanId) : { plan: null, brackets: [], groups: [], prices: [] };
+
+  async function createPlanAction(formData: FormData) {
+    "use server";
+    const actor = await getSessionUser();
+    if (!actor) redirect("/login");
+    const input = Object.fromEntries(formData.entries()) as Record<string, string>;
+    try {
+      await createTariffPlan(input, { id: actor.id, role: actor.role });
+      revalidatePath("/tarifas");
+      redirect("/tarifas");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Error creando tarifa";
+      redirect(`/tarifas?error=${encodeURIComponent(message)}`);
+    }
+  }
+
+  async function saveBracketAction(formData: FormData) {
+    "use server";
+    const actor = await getSessionUser();
+    if (!actor) redirect("/login");
+    const input = Object.fromEntries(formData.entries()) as Record<string, string>;
+    try {
+      await upsertTariffBracket(input, { id: actor.id, role: actor.role });
+      revalidatePath("/tarifas");
+      redirect(`/tarifas?tariffPlanId=${encodeURIComponent(input.tariffPlanId)}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Error guardando tramo";
+      redirect(`/tarifas?tariffPlanId=${encodeURIComponent(input.tariffPlanId ?? "")}&error=${encodeURIComponent(message)}`);
+    }
+  }
+
+  async function saveMatrixAction(formData: FormData) {
+    "use server";
+    const actor = await getSessionUser();
+    if (!actor) redirect("/login");
+
+    const input = Object.fromEntries(formData.entries()) as Record<string, string>;
+    const planId = String(input.tariffPlanId ?? "");
+    try {
+      for (const [key, value] of Object.entries(input)) {
+        if (!key.startsWith("cell__")) continue;
+        const parts = key.split("__");
+        const groupCode = parts[1] ?? "";
+        const bracketId = parts[2] ?? "";
+        await upsertTariffPrice(
+          {
+            tariffPlanId: planId,
+            groupCode,
+            bracketId,
+            price: String(value ?? "0"),
+            maxKmPerDay: "0",
+          },
+          { id: actor.id, role: actor.role },
+        );
+      }
+      revalidatePath("/tarifas");
+      redirect(`/tarifas?tariffPlanId=${encodeURIComponent(planId)}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Error guardando tabla";
+      redirect(`/tarifas?tariffPlanId=${encodeURIComponent(planId)}&error=${encodeURIComponent(message)}`);
+    }
+  }
+
+  async function updatePlanAction(formData: FormData) {
+    "use server";
+    const actor = await getSessionUser();
+    if (!actor) redirect("/login");
+    const input = Object.fromEntries(formData.entries()) as Record<string, string>;
+    const planId = String(input.tariffPlanId ?? "");
+    try {
+      await updateTariffPlan(planId, input, { id: actor.id, role: actor.role });
+      revalidatePath("/tarifas");
+      redirect(`/tarifas?tariffPlanId=${encodeURIComponent(planId)}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Error actualizando tarifa";
+      redirect(`/tarifas?tariffPlanId=${encodeURIComponent(planId)}&error=${encodeURIComponent(message)}`);
+    }
+  }
+
+  async function deletePlanAction(formData: FormData) {
+    "use server";
+    const actor = await getSessionUser();
+    if (!actor) redirect("/login");
+    const planId = String(formData.get("tariffPlanId") ?? "");
+    try {
+      await deleteTariffPlan(planId, { id: actor.id, role: actor.role });
+      revalidatePath("/tarifas");
+      redirect("/tarifas");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Error borrando tarifa";
+      redirect(`/tarifas?tariffPlanId=${encodeURIComponent(planId)}&error=${encodeURIComponent(message)}`);
+    }
+  }
+
+  async function deleteBracketAction(formData: FormData) {
+    "use server";
+    const actor = await getSessionUser();
+    if (!actor) redirect("/login");
+    const planId = String(formData.get("tariffPlanId") ?? "");
+    const bracketId = String(formData.get("bracketId") ?? "");
+    try {
+      await deleteTariffBracket(bracketId, { id: actor.id, role: actor.role });
+      revalidatePath("/tarifas");
+      redirect(`/tarifas?tariffPlanId=${encodeURIComponent(planId)}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Error borrando tramo";
+      redirect(`/tarifas?tariffPlanId=${encodeURIComponent(planId)}&error=${encodeURIComponent(message)}`);
+    }
+  }
+
+  return (
+    <div className="stack-lg">
+      <header className="stack-sm">
+        <h2>Tarifas</h2>
+        <p className="muted-text">Vista tipo Excel: filas por grupo y columnas por tramo.</p>
+      </header>
+
+      {params.error ? <p className="danger-text">{params.error}</p> : null}
+
+      <section className="card stack-sm">
+        <h3>Tarifas</h3>
+        <form action={createPlanAction} className="inline-search">
+          <input name="code" placeholder="Código" required />
+          <input name="title" placeholder="Título" required />
+          <button className="primary-btn" type="submit">Crear</button>
+        </form>
+        <form method="GET" className="inline-search">
+          <input name="q" defaultValue={q} placeholder="Buscar" />
+          <select name="tariffPlanId" defaultValue={tariffPlanId}>
+            {plans.map((plan) => (
+              <option key={plan.id} value={plan.id}>{plan.code} - {plan.title}</option>
+            ))}
+          </select>
+          <button className="secondary-btn" type="submit">Abrir</button>
+        </form>
+      </section>
+
+      {catalog.plan ? (
+        <>
+          <section className="card stack-sm">
+            <h3>Configuración de tarifa activa</h3>
+            <form action={updatePlanAction} className="form-grid">
+              <input type="hidden" name="tariffPlanId" value={catalog.plan.id} />
+              <label>
+                Código
+                <input value={catalog.plan.code} readOnly />
+              </label>
+              <label>
+                Nombre de tarifa *
+                <input name="title" defaultValue={catalog.plan.title} required />
+              </label>
+              <label>
+                Fecha desde
+                <input name="validFrom" type="date" defaultValue={catalog.plan.validFrom || ""} />
+              </label>
+              <label>
+                Fecha hasta
+                <input name="validTo" type="date" defaultValue={catalog.plan.validTo || ""} />
+              </label>
+              <label>
+                Temporada
+                <input name="season" defaultValue={catalog.plan.season || ""} />
+              </label>
+              <label>
+                Activa
+                <select name="active" defaultValue={catalog.plan.active ? "true" : "false"}>
+                  <option value="true">Sí</option>
+                  <option value="false">No</option>
+                </select>
+              </label>
+              <label className="col-span-2">
+                Notas
+                <input name="notes" defaultValue={catalog.plan.notes || ""} />
+              </label>
+              <div className="col-span-2">
+                <button className="secondary-btn" type="submit">Guardar configuración</button>
+              </div>
+            </form>
+            <form action={deletePlanAction} className="inline-search">
+              <input type="hidden" name="tariffPlanId" value={catalog.plan.id} />
+              <button className="secondary-btn" type="submit">Borrar tarifa</button>
+            </form>
+          </section>
+
+          <section className="card stack-sm">
+            <h3>Tramos de la tarifa</h3>
+            <form action={saveBracketAction} className="inline-search">
+              <input type="hidden" name="tariffPlanId" value={catalog.plan.id} />
+              <input name="label" placeholder="Etiqueta" required />
+              <input name="fromDay" type="number" min={1} placeholder="Desde" required />
+              <input name="toDay" type="number" min={1} placeholder="Hasta" required />
+              <input name="order" type="number" min={1} placeholder="Orden" />
+              <select name="isExtraDay" defaultValue="false">
+                <option value="false">Normal</option>
+                <option value="true">Extra</option>
+              </select>
+              <button className="secondary-btn" type="submit">Añadir tramo</button>
+            </form>
+            <div className="table-wrap">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Etiqueta</th>
+                    <th>Desde</th>
+                    <th>Hasta</th>
+                    <th>Orden</th>
+                    <th>Extra</th>
+                    <th>Acciones</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {catalog.brackets.length === 0 ? (
+                    <tr><td colSpan={6} className="muted-text">Sin tramos.</td></tr>
+                  ) : (
+                    catalog.brackets.map((bracket) => (
+                      <tr key={bracket.id}>
+                        <td>{bracket.label}</td>
+                        <td>{bracket.fromDay}</td>
+                        <td>{bracket.toDay}</td>
+                        <td>{bracket.order}</td>
+                        <td>{bracket.isExtraDay ? "Sí" : "No"}</td>
+                        <td>
+                          <details>
+                            <summary>Editar / Borrar</summary>
+                            <form action={saveBracketAction} className="mini-form">
+                              <input type="hidden" name="tariffPlanId" value={tariffPlanId} />
+                              <input type="hidden" name="bracketId" value={bracket.id} />
+                              <label>Etiqueta<input name="label" defaultValue={bracket.label} /></label>
+                              <label>Desde<input name="fromDay" type="number" defaultValue={String(bracket.fromDay)} /></label>
+                              <label>Hasta<input name="toDay" type="number" defaultValue={String(bracket.toDay)} /></label>
+                              <label>Orden<input name="order" type="number" defaultValue={String(bracket.order)} /></label>
+                              <label>Extra<select name="isExtraDay" defaultValue={bracket.isExtraDay ? "true" : "false"}><option value="false">No</option><option value="true">Sí</option></select></label>
+                              <button className="secondary-btn" type="submit">Guardar tramo</button>
+                            </form>
+                            <form action={deleteBracketAction} className="mini-form">
+                              <input type="hidden" name="tariffPlanId" value={tariffPlanId} />
+                              <input type="hidden" name="bracketId" value={bracket.id} />
+                              <button className="secondary-btn" type="submit">Borrar tramo</button>
+                            </form>
+                          </details>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section className="card stack-sm">
+            <h3>Tabla de precios</h3>
+            <form action={saveMatrixAction} className="stack-sm">
+              <input type="hidden" name="tariffPlanId" value={catalog.plan.id} />
+              <div className="table-wrap">
+                <table className="data-table excel-table">
+                  <thead>
+                    <tr>
+                      <th>Grupo</th>
+                      {catalog.brackets.map((bracket) => (
+                        <th key={`h-${bracket.id}`}>{bracket.label}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {catalog.groups.length === 0 ? (
+                      <tr>
+                        <td colSpan={Math.max(2, catalog.brackets.length + 1)} className="muted-text">Sin grupos.</td>
+                      </tr>
+                    ) : (
+                      catalog.groups.map((group) => (
+                        <tr key={`r-${group}`}>
+                          <td><strong>{group}</strong></td>
+                          {catalog.brackets.map((bracket) => {
+                            const current = catalog.prices.find(
+                              (item) => item.groupCode === group && item.bracketId === bracket.id,
+                            );
+                            return (
+                              <td key={`c-${group}-${bracket.id}`}>
+                                <div className="excel-cell">
+                                  <input
+                                    className="excel-input"
+                                    name={`cell__${group}__${bracket.id}`}
+                                    type="number"
+                                    step="0.01"
+                                    defaultValue={String(current?.price ?? 0)}
+                                  />
+                                </div>
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              <button className="primary-btn" type="submit">Guardar tabla</button>
+            </form>
+          </section>
+        </>
+      ) : null}
+    </div>
+  );
+}

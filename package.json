@@ -1,0 +1,42 @@
+{
+  "name": "rentiq-gestion-v3",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "node node_modules/next/dist/bin/next dev --port 3203",
+    "build": "node node_modules/next/dist/bin/next build",
+    "start": "node node_modules/next/dist/bin/next start --port 3203",
+    "lint": "eslint",
+    "seed:demo": "tsx scripts/seed-demo.mts",
+    "healthcheck": "tsx scripts/healthcheck.mts",
+    "validate:data": "tsx scripts/validate-data.mts",
+    "validate:audit": "tsx scripts/validate-audit-coverage.mts",
+    "test:auth": "tsx scripts/test-auth-flow.mts",
+    "test:flujo-core": "tsx scripts/test-flujo-core.mts",
+    "test:audit-suppress": "tsx scripts/test-audit-suppress.mts",
+    "test:gastos": "tsx scripts/test-gastos.mts",
+    "test:backup": "tsx scripts/test-backup.mts",
+    "test:integridad": "tsx scripts/test-integridad.mts",
+    "test:extras": "tsx scripts/test-extras.mts"
+  },
+  "dependencies": {
+    "@swc/helpers": "^0.5.19",
+    "next": "16.1.6",
+    "nodemailer": "^8.0.1",
+    "pdfkit": "^0.17.2",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "styled-jsx": "5.1.7"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/nodemailer": "^7.0.11",
+    "@types/pdfkit": "^0.17.5",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.1.6",
+    "tsx": "^4.21.0",
+    "typescript": "^5"
+  }
+}

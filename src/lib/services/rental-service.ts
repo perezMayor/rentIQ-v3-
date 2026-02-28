@@ -1,0 +1,4371 @@
+import { appendAuditEvent, readAuditEventsByContract, readAuditEventsByReservation } from "@/lib/audit";
+import { sendMailFromCompany } from "@/lib/mail";
+import type {
+  Client,
+  Contract,
+  FleetVehicle,
+  InternalExpense,
+  Invoice,
+  RentalData,
+  Reservation,
+  RoleName,
+  TariffPlan,
+  TariffPrice,
+  VehicleCategory,
+  VehicleBlock,
+  VehicleTask,
+  VehicleModel,
+  VehicleExtra,
+} from "@/lib/domain/rental";
+import { readRentalData, writeRentalData } from "@/lib/services/rental-store";
+
+// Helpers de normalización y cálculo usados por distintos módulos de negocio.
+function getYear(inputIsoDate: string): string {
+  const date = new Date(inputIsoDate);
+  return String(Number.isNaN(date.getTime()) ? new Date().getFullYear() : date.getFullYear());
+}
+
+function getYearShort(inputIsoDate: string): string {
+  return getYear(inputIsoDate).slice(-2);
+}
+
+function normalizeBranchCode(input: string): string {
+  const cleaned = input.trim().toUpperCase().replace(/\s+/g, "-");
+  return cleaned || "SUC-ND";
+}
+
+function parseNumber(input: string): number {
+  const parsed = Number(input);
+  if (!Number.isFinite(parsed)) {
+    return 0;
+  }
+  return parsed;
+}
+
+function formatMoney(value: number): string {
+  return value.toFixed(2);
+}
+
+function calculateReservationTotal(input: {
+  baseAmount: number;
+  discountAmount: number;
+  extrasAmount: number;
+  fuelAmount: number;
+  insuranceAmount: number;
+  penaltiesAmount: number;
+}): number {
+  return (
+    input.baseAmount -
+    input.discountAmount +
+    input.extrasAmount +
+    input.fuelAmount +
+    input.insuranceAmount +
+    input.penaltiesAmount
+  );
+}
+
+type SelectedExtraInput = {
+  extraId: string;
+  units: number;
+};
+
+function normalizeOwnerName(input: string): string {
+  return input.trim().replace(/\s+/g, " ").toUpperCase();
+}
+
+function parseSelectedExtrasPayload(payloadRaw: string): SelectedExtraInput[] {
+  const raw = payloadRaw.trim();
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    const normalized = parsed
+      .map((item) => {
+        if (!item || typeof item !== "object") return null;
+        const candidate = item as { extraId?: unknown; units?: unknown };
+        const extraId = String(candidate.extraId ?? "").trim();
+        if (!extraId) return null;
+        const unitsNumber = Number(candidate.units ?? 1);
+        const units = Number.isFinite(unitsNumber) ? Math.max(1, Math.floor(unitsNumber)) : 1;
+        return { extraId, units };
+      })
+      .filter((item): item is SelectedExtraInput => item !== null);
+    return normalized;
+  } catch {
+    return [];
+  }
+}
+
+function calculateExtrasFromSelection(
+  input: { selected: SelectedExtraInput[]; billedDays: number; fallbackAmount: number; fallbackBreakdown: string },
+  extrasCatalog: VehicleExtra[],
+) {
+  if (input.selected.length === 0) {
+    return { amount: input.fallbackAmount, breakdown: input.fallbackBreakdown };
+  }
+
+  let total = 0;
+  const lines: string[] = [];
+  for (const selection of input.selected) {
+    const extra = extrasCatalog.find((item) => item.id === selection.extraId && item.active);
+    if (!extra) continue;
+    const requestedUnits = selection.units ?? Math.max(1, input.billedDays || 1);
+    const units =
+      extra.priceMode === "POR_DIA"
+        ? Math.min(requestedUnits, extra.maxDays > 0 ? extra.maxDays : requestedUnits)
+        : 1;
+    const amount = extra.priceMode === "POR_DIA" ? extra.unitPrice * units : extra.unitPrice;
+    total += amount;
+    lines.push(`${extra.code}:${extra.name} x${units} (${extra.priceMode === "POR_DIA" ? "dia" : "fijo"}) = ${amount.toFixed(2)}`);
+  }
+
+  if (lines.length === 0) {
+    return { amount: 0, breakdown: "" };
+  }
+  return { amount: Number(total.toFixed(2)), breakdown: lines.join(" | ") };
+}
+
+function ensureAssignedPlateAvailabilityForReservation(input: {
+  assignedPlate: string;
+  deliveryAt: string;
+  fleetVehicles: FleetVehicle[];
+}) {
+  if (!input.assignedPlate) {
+    return { found: false, warningLimit: false };
+  }
+  const vehicle = input.fleetVehicles.find((item) => item.plate.toUpperCase() === input.assignedPlate.toUpperCase()) ?? null;
+  if (!vehicle) {
+    return { found: false, warningLimit: false };
+  }
+  if (vehicle.deactivatedAt) {
+    throw new Error("No se puede reservar una matrícula dada de baja");
+  }
+  const delivery = parseDateSafe(input.deliveryAt);
+  const limit = vehicle.activeUntil ? parseDateSafe(`${vehicle.activeUntil}T23:59:59`) : null;
+  return { found: true, warningLimit: Boolean(delivery && limit && delivery > limit), vehicle };
+}
+
+function normalizeInvoiceSeries(input: string, fallback: string): string {
+  const cleaned = input.trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+  return cleaned || fallback;
+}
+
+function buildContractNumber(yearShort: string, branchCode: string, counter: number): string {
+  return `${yearShort}-${branchCode}-${String(counter).padStart(5, "0")}`;
+}
+
+function buildInvoiceNumber(series: string, yearShort: string, branchCode: string, counter: number): string {
+  return `${series}${yearShort}-${branchCode}-${String(counter).padStart(5, "0")}`;
+}
+
+function parseDateSafe(value: string): Date | null {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+  return parsed;
+}
+
+function hasOverlap(aStart: string, aEnd: string, bStart: string, bEnd: string): boolean {
+  const a1 = parseDateSafe(aStart);
+  const a2 = parseDateSafe(aEnd);
+  const b1 = parseDateSafe(bStart);
+  const b2 = parseDateSafe(bEnd);
+  if (!a1 || !a2 || !b1 || !b2) {
+    return false;
+  }
+  return a1 < b2 && b1 < a2;
+}
+
+function normalizeGroupToken(value: string): string {
+  return value.trim().toUpperCase().replace(/\s+/g, "");
+}
+
+function vehicleMatchesGroup(category: VehicleCategory | null, requestedGroup: string): boolean {
+  if (!category) return false;
+  const wanted = normalizeGroupToken(requestedGroup);
+  if (!wanted) return false;
+  const byCode = normalizeGroupToken(category.code) === wanted;
+  const byName = normalizeGroupToken(category.name) === wanted;
+  return byCode || byName;
+}
+
+function plateHasConflictsInPeriod(
+  data: RentalData,
+  plate: string,
+  startAt: string,
+  endAt: string,
+  input?: { excludeReservationId?: string; excludeContractId?: string },
+) {
+  const normalized = plate.trim().toUpperCase();
+  if (!normalized) return false;
+  const conflictsReservation = data.reservations.some((item) => {
+    if (input?.excludeReservationId && item.id === input.excludeReservationId) return false;
+    if (!item.assignedPlate) return false;
+    return (
+      item.assignedPlate.trim().toUpperCase() === normalized &&
+      hasOverlap(item.deliveryAt, item.pickupAt, startAt, endAt)
+    );
+  });
+  if (conflictsReservation) return true;
+
+  const conflictsContract = data.contracts.some((item) => {
+    if (input?.excludeContractId && item.id === input.excludeContractId) return false;
+    if (!item.vehiclePlate) return false;
+    return item.vehiclePlate.trim().toUpperCase() === normalized && hasOverlap(item.deliveryAt, item.pickupAt, startAt, endAt);
+  });
+  if (conflictsContract) return true;
+
+  return data.vehicleBlocks.some(
+    (block) => block.vehiclePlate.trim().toUpperCase() === normalized && hasOverlap(block.startAt, block.endAt, startAt, endAt),
+  );
+}
+
+function findFirstAvailablePlateForGroup(
+  data: RentalData,
+  input: {
+    requestedGroup: string;
+    startAt: string;
+    endAt: string;
+    excludeReservationId?: string;
+    excludeContractId?: string;
+  },
+): string | null {
+  const start = parseDateSafe(input.startAt);
+  if (!start || !parseDateSafe(input.endAt)) return null;
+
+  for (const vehicle of data.fleetVehicles) {
+    if (vehicle.deactivatedAt) continue;
+    const category = data.vehicleCategories.find((item) => item.id === vehicle.categoryId) ?? null;
+    if (!vehicleMatchesGroup(category, input.requestedGroup)) continue;
+    if (vehicle.activeUntil) {
+      const limit = parseDateSafe(`${vehicle.activeUntil}T23:59:59`);
+      if (limit && start > limit) continue;
+    }
+    const hasConflicts = plateHasConflictsInPeriod(data, vehicle.plate, input.startAt, input.endAt, {
+      excludeReservationId: input.excludeReservationId,
+      excludeContractId: input.excludeContractId,
+    });
+    if (!hasConflicts) return vehicle.plate.trim().toUpperCase();
+  }
+
+  return null;
+}
+
+function isInsideRange(value: string, from: string, to: string): boolean {
+  const date = parseDateSafe(value);
+  const fromDate = parseDateSafe(from);
+  const toDate = parseDateSafe(to);
+  if (!date || !fromDate || !toDate) {
+    return false;
+  }
+  return date >= fromDate && date <= toDate;
+}
+
+// -------------------- Consultas globales --------------------
+export async function listReservations(query: string): Promise<Reservation[]> {
+  const data = await readRentalData();
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) {
+    return data.reservations.toSorted((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  return data.reservations
+    .filter((reservation) => {
+      return [
+        reservation.reservationNumber,
+        reservation.customerName,
+        reservation.customerCompany,
+        reservation.assignedPlate,
+        reservation.deliveryAt,
+        reservation.pickupAt,
+        reservation.salesChannel,
+      ]
+        .join(" ")
+        .toLowerCase()
+        .includes(normalizedQuery);
+    })
+    .toSorted((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+export async function listReservationAudit(reservationId: string) {
+  const data = await readRentalData();
+  const reservation = data.reservations.find((item) => item.id === reservationId);
+  if (!reservation) {
+    throw new Error("Reserva no encontrada");
+  }
+  return readAuditEventsByReservation({
+    reservationId,
+    contractId: reservation.contractId,
+    limit: 300,
+  });
+}
+
+export async function listContractAudit(contractId: string) {
+  const data = await readRentalData();
+  const contract = data.contracts.find((item) => item.id === contractId);
+  if (!contract) {
+    throw new Error("Contrato no encontrado");
+  }
+  return readAuditEventsByContract({
+    contractId,
+    reservationId: contract.reservationId,
+    limit: 300,
+  });
+}
+
+export async function getReservationForecast(input: { from: string; to: string }) {
+  const data = await readRentalData();
+  const from = parseDateSafe(`${input.from}T00:00:00`);
+  const to = parseDateSafe(`${input.to}T23:59:59`);
+  if (!from || !to || from > to) {
+    throw new Error("Rango de previsión no válido");
+  }
+  const reservations = data.reservations.filter((reservation) =>
+    hasOverlap(reservation.deliveryAt, reservation.pickupAt, from.toISOString(), to.toISOString()),
+  );
+  const requiredByGroup: Record<string, number> = {};
+  for (const reservation of reservations) {
+    const key = reservation.billedCarGroup || "N/D";
+    requiredByGroup[key] = (requiredByGroup[key] ?? 0) + 1;
+  }
+  const fleetByGroup: Record<string, number> = {};
+  for (const vehicle of data.fleetVehicles) {
+    const category = data.vehicleCategories.find((item) => item.id === vehicle.categoryId);
+    const key = category?.code || category?.name || "N/D";
+    fleetByGroup[key] = (fleetByGroup[key] ?? 0) + 1;
+  }
+  const allGroups = Array.from(new Set([...Object.keys(requiredByGroup), ...Object.keys(fleetByGroup)]));
+  return allGroups
+    .map((group) => {
+      const required = requiredByGroup[group] ?? 0;
+      const available = fleetByGroup[group] ?? 0;
+      return {
+        group,
+        required,
+        available,
+        deficit: Math.max(0, required - available),
+      };
+    })
+    .toSorted((a, b) => a.group.localeCompare(b.group));
+}
+
+export async function listSalesChannels() {
+  const data = await readRentalData();
+  const configured = data.companySettings.salesChannels ?? [];
+  const fromReservations = data.reservations.map((item) => item.salesChannel);
+  const fromClients = data.clients.map((item) => item.acquisitionChannel);
+  return Array.from(
+    new Set(
+      [...configured, ...fromReservations, ...fromClients]
+        .map((value) => value.trim())
+        .filter(Boolean),
+    ),
+  ).toSorted((a, b) => a.localeCompare(b));
+}
+
+export async function addSalesChannel(channel: string, actor: { id: string; role: RoleName }) {
+  const value = channel.trim();
+  if (!value) {
+    throw new Error("Canal obligatorio");
+  }
+  const data = await readRentalData();
+  const exists = (data.companySettings.salesChannels ?? []).some(
+    (item) => item.trim().toLowerCase() === value.toLowerCase(),
+  );
+  if (!exists) {
+    data.companySettings.salesChannels = [...(data.companySettings.salesChannels ?? []), value];
+    data.companySettings.updatedAt = new Date().toISOString();
+    data.companySettings.updatedBy = actor.id;
+    await writeRentalData(data);
+    await appendAuditEvent({
+      timestamp: new Date().toISOString(),
+      action: "SYSTEM",
+      actorId: actor.id,
+      actorRole: actor.role,
+      entity: "sales_channel",
+      entityId: value.toLowerCase(),
+      details: { channel: value },
+    });
+  }
+}
+
+export async function getSalesChannelStats(input: { from: string; to: string }) {
+  const data = await readRentalData();
+  const rows: Record<string, { channel: string; total: number }> = {};
+  for (const reservation of data.reservations) {
+    if (!isInsideRange(reservation.createdAt, `${input.from}T00:00:00`, `${input.to}T23:59:59`)) {
+      continue;
+    }
+    const channel = reservation.salesChannel.trim() || "N/D";
+    rows[channel] = rows[channel] ?? { channel, total: 0 };
+    rows[channel].total += 1;
+  }
+  return Object.values(rows).toSorted((a, b) => b.total - a.total || a.channel.localeCompare(b.channel));
+}
+
+export async function listContracts(query: string): Promise<Contract[]> {
+  const data = await readRentalData();
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) {
+    return data.contracts.toSorted((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  return data.contracts
+    .filter((contract) => {
+      return [
+        contract.contractNumber,
+        contract.customerName,
+        contract.companyName,
+        contract.vehiclePlate,
+        contract.deliveryAt,
+        contract.pickupAt,
+      ]
+        .join(" ")
+        .toLowerCase()
+        .includes(normalizedQuery);
+    })
+    .toSorted((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+export async function listInvoices(query: string): Promise<Invoice[]> {
+  const data = await readRentalData();
+  const normalizedInvoices = data.invoices.map((invoice) => ({
+    ...invoice,
+    invoiceName: invoice.invoiceName || `Factura ${invoice.invoiceNumber}`,
+  }));
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) {
+    return normalizedInvoices.toSorted((a, b) => b.issuedAt.localeCompare(a.issuedAt));
+  }
+
+  return normalizedInvoices
+    .filter((invoice) => {
+      return [invoice.invoiceNumber, invoice.invoiceName, invoice.contractId, invoice.issuedAt]
+        .join(" ")
+        .toLowerCase()
+        .includes(normalizedQuery);
+    })
+    .toSorted((a, b) => b.issuedAt.localeCompare(a.issuedAt));
+}
+
+export async function listInvoiceJournal(input: { q: string; from: string; to: string }): Promise<Invoice[]> {
+  const invoices = await listInvoices(input.q);
+  const from = `${input.from}T00:00:00`;
+  const to = `${input.to}T23:59:59`;
+  return invoices
+    .filter((invoice) => isInsideRange(invoice.issuedAt, from, to))
+    .toSorted((a, b) => b.issuedAt.localeCompare(a.issuedAt));
+}
+
+// -------------------- Facturación --------------------
+export async function renameInvoice(invoiceId: string, invoiceName: string, actor: { id: string; role: RoleName }) {
+  const data = await readRentalData();
+  const invoice = data.invoices.find((item) => item.id === invoiceId);
+  if (!invoice) {
+    throw new Error("Factura no encontrada");
+  }
+  const clean = invoiceName.trim();
+  if (!clean) {
+    throw new Error("Nombre de factura obligatorio");
+  }
+  invoice.invoiceName = clean;
+  await writeRentalData(data);
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "invoice_rename",
+    entityId: invoice.id,
+    details: { invoiceNumber: invoice.invoiceNumber, invoiceName: clean },
+  });
+}
+
+export async function changeInvoiceDate(invoiceId: string, issuedAt: string, actor: { id: string; role: RoleName }) {
+  const data = await readRentalData();
+  const invoice = data.invoices.find((item) => item.id === invoiceId);
+  if (!invoice) {
+    throw new Error("Factura no encontrada");
+  }
+  if (!parseDateSafe(issuedAt)) {
+    throw new Error("Fecha de factura no válida");
+  }
+  invoice.issuedAt = issuedAt;
+  await writeRentalData(data);
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "invoice_change_date",
+    entityId: invoice.id,
+    details: { invoiceNumber: invoice.invoiceNumber, issuedAt },
+  });
+}
+
+export async function deleteInvoice(invoiceId: string, actor: { id: string; role: RoleName }) {
+  const data = await readRentalData();
+  const invoice = data.invoices.find((item) => item.id === invoiceId);
+  if (!invoice) {
+    throw new Error("Factura no encontrada");
+  }
+  const linkedContract = data.contracts.find((item) => item.invoiceId === invoiceId);
+  if (linkedContract) {
+    if (linkedContract.status === "CERRADO") {
+      throw new Error("No se puede borrar factura de contrato cerrado (trazabilidad obligatoria)");
+    }
+    linkedContract.invoiceId = null;
+  }
+  data.invoices = data.invoices.filter((item) => item.id !== invoiceId);
+  await writeRentalData(data);
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "invoice_delete",
+    entityId: invoice.id,
+    details: { invoiceNumber: invoice.invoiceNumber },
+  });
+}
+
+export async function sendInvoiceByEmail(
+  invoiceId: string,
+  toEmail: string,
+  actor: { id: string; role: RoleName },
+): Promise<void> {
+  await recordInvoiceSendLog(invoiceId, toEmail, "ENVIADA", actor);
+}
+
+export async function recordInvoiceSendLog(
+  invoiceId: string,
+  toEmail: string,
+  status: "ENVIADA" | "ERROR",
+  actor: { id: string; role: RoleName },
+): Promise<void> {
+  const data = await readRentalData();
+  const invoice = data.invoices.find((item) => item.id === invoiceId);
+  if (!invoice) {
+    throw new Error("Factura no encontrada");
+  }
+  if (!toEmail.trim()) {
+    throw new Error("Email destino obligatorio");
+  }
+
+  invoice.sentLog.push({
+    sentAt: new Date().toISOString(),
+    sentBy: actor.id,
+    to: toEmail.trim(),
+    status,
+  });
+  await writeRentalData(data);
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "invoice_send_email",
+    entityId: invoice.id,
+    details: { invoiceNumber: invoice.invoiceNumber, toEmail, status },
+  });
+}
+
+export async function getInvoiceById(invoiceId: string): Promise<Invoice | null> {
+  const data = await readRentalData();
+  const invoice = data.invoices.find((item) => item.id === invoiceId);
+  if (!invoice) {
+    return null;
+  }
+  return {
+    ...invoice,
+    invoiceName: invoice.invoiceName || `Factura ${invoice.invoiceNumber}`,
+  };
+}
+
+export async function listInvoiceSendLogs(input: { from: string; to: string }) {
+  const invoices = await listInvoices("");
+  return invoices
+    .flatMap((invoice) =>
+    invoice.sentLog
+      .filter((log) => isInsideRange(log.sentAt, input.from, input.to))
+      .map((log) => ({
+        invoiceId: invoice.id,
+        invoiceNumber: invoice.invoiceNumber,
+        invoiceName: invoice.invoiceName,
+        sentAt: log.sentAt,
+        sentBy: log.sentBy,
+        to: log.to,
+        status: log.status,
+      })),
+    )
+    .toSorted((a, b) => b.sentAt.localeCompare(a.sentAt));
+}
+
+export async function listExpenseJournal(input: { from: string; to: string; plate: string }) {
+  const data = await readRentalData();
+  const plate = input.plate.trim().toUpperCase();
+  const rows = data.internalExpenses
+    .filter((expense) => {
+      if (!isInsideRange(`${expense.expenseDate}T12:00:00`, `${input.from}T00:00:00`, `${input.to}T23:59:59`)) {
+        return false;
+      }
+      if (plate && !expense.vehiclePlate.toUpperCase().includes(plate)) {
+        return false;
+      }
+      return true;
+    })
+    .map((expense) => {
+      const meta = expense.contractId === "__DIARIO__" ? parseDailyExpenseMeta(expense.note) : { batchId: "", workerName: "" };
+      return {
+        expenseDate: expense.expenseDate,
+        vehiclePlate: expense.vehiclePlate.toUpperCase(),
+        category: expense.category,
+        amount: expense.amount,
+        note: expense.note,
+        contractId: expense.contractId,
+        sourceType: expense.contractId === "__DIARIO__" ? "DIARIO" : "CONTRATO",
+        batchId: meta.batchId,
+        workerName: meta.workerName,
+      };
+    })
+    .toSorted((a, b) => {
+      const byDate = b.expenseDate.localeCompare(a.expenseDate);
+      if (byDate !== 0) return byDate;
+      return a.vehiclePlate.localeCompare(b.vehiclePlate);
+    });
+
+  const totalExpenses = rows.reduce((sum, row) => sum + row.amount, 0);
+  return { rows, totalExpenses };
+}
+
+export async function listContractClosureReconciliation(input: { from: string; to: string }) {
+  const data = await readRentalData();
+  return data.contracts
+    .filter((contract) => contract.status === "CERRADO" && contract.closedAt)
+    .filter((contract) => isInsideRange(contract.closedAt || "", `${input.from}T00:00:00`, `${input.to}T23:59:59`))
+    .map((contract) => {
+      const invoice = contract.invoiceId ? data.invoices.find((item) => item.id === contract.invoiceId) ?? null : null;
+      return {
+        contractId: contract.id,
+        contractNumber: contract.contractNumber,
+        closedAt: contract.closedAt || "",
+        cashAmount: contract.cashRecord?.amount ?? 0,
+        cashMethod: contract.cashRecord?.method ?? "N/D",
+        invoiceNumber: invoice?.invoiceNumber ?? "N/D",
+        invoiceTotal: invoice?.totalAmount ?? 0,
+      };
+    })
+    .toSorted((a, b) => b.closedAt.localeCompare(a.closedAt));
+}
+
+// -------------------- Configuración empresa --------------------
+export async function getCompanySettings() {
+  const data = await readRentalData();
+  return data.companySettings;
+}
+
+export async function updateCompanySettings(input: Record<string, string>, actor: { id: string; role: RoleName }) {
+  const data = await readRentalData();
+
+  const branchesRaw = (input.branchesRaw ?? "").trim();
+  const branches = branchesRaw
+    ? branchesRaw
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line) => {
+          const [code, ...rest] = line.split("|");
+          return {
+            code: normalizeBranchCode(code ?? ""),
+            name: rest.join("|").trim() || "N/D",
+          };
+        })
+    : [];
+  const providersRaw = (input.providersRaw ?? "").trim();
+  const providers = providersRaw
+    ? Array.from(
+        new Set(
+          providersRaw
+            .split("\n")
+            .map((line) => normalizeOwnerName(line))
+            .filter(Boolean),
+        ),
+      )
+    : (data.companySettings.providers ?? []);
+
+  data.companySettings = {
+    companyName: (input.companyName ?? "N/D").trim() || "N/D",
+    companyEmailFrom: (input.companyEmailFrom ?? "N/D").trim() || "N/D",
+    taxId: (input.taxId ?? "N/D").trim() || "N/D",
+    fiscalAddress: (input.fiscalAddress ?? "N/D").trim() || "N/D",
+    defaultIvaPercent: parseNumber(input.defaultIvaPercent ?? String(data.companySettings.defaultIvaPercent)),
+    salesChannels: data.companySettings.salesChannels ?? [],
+    providers,
+    backupRetentionDays: Math.max(1, Math.floor(parseNumber(input.backupRetentionDays ?? String(data.companySettings.backupRetentionDays ?? 90)))),
+    invoiceSeriesByType: {
+      F: normalizeInvoiceSeries(input.invoiceSeriesF ?? data.companySettings.invoiceSeriesByType.F, "F"),
+      R: normalizeInvoiceSeries(input.invoiceSeriesR ?? data.companySettings.invoiceSeriesByType.R, "R"),
+      V: normalizeInvoiceSeries(input.invoiceSeriesV ?? data.companySettings.invoiceSeriesByType.V, "V"),
+      A: normalizeInvoiceSeries(input.invoiceSeriesA ?? data.companySettings.invoiceSeriesByType.A, "A"),
+    },
+    branches,
+    contractNumberPattern: "aa-sucursal-numero",
+    invoiceNumberPattern: "aa-sucursal-numero",
+    updatedAt: new Date().toISOString(),
+    updatedBy: actor.id,
+  };
+
+  await writeRentalData(data);
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "company_settings",
+    entityId: "default",
+    details: { updatedBy: actor.id, branches: data.companySettings.branches.length },
+  });
+}
+
+// -------------------- Reservas y asignación de vehículo --------------------
+export async function createReservation(input: Record<string, string>, actor: { id: string; role: RoleName }) {
+  const data = await readRentalData();
+  const inputCustomerId = (input.customerId ?? "").trim();
+  const client = inputCustomerId ? data.clients.find((item) => item.id === inputCustomerId) ?? null : null;
+  const billedCarGroup = input.billedCarGroup?.trim() ?? "";
+  const appliedRate = (input.appliedRate ?? "").trim();
+  const billedDays = parseNumber(input.billedDays ?? "0");
+  let baseAmount = parseNumber(input.baseAmount ?? "0");
+  if (baseAmount <= 0 && appliedRate && billedCarGroup && billedDays > 0) {
+    const plan = data.tariffPlans.find((item) => item.code.toUpperCase() === appliedRate.toUpperCase());
+    if (plan) {
+      const brackets = data.tariffBrackets
+        .filter((item) => item.tariffPlanId === plan.id)
+        .toSorted((a, b) => a.order - b.order);
+      const bracket = brackets.find((item) => billedDays >= item.fromDay && billedDays <= item.toDay);
+      const extra = brackets.find((item) => item.isExtraDay);
+      const selected = bracket ?? extra ?? null;
+      if (selected) {
+        const priceRow = data.tariffPrices.find(
+          (item) =>
+            item.tariffPlanId === plan.id &&
+            item.bracketId === selected.id &&
+            item.groupCode.toUpperCase() === billedCarGroup.toUpperCase(),
+        );
+        if (priceRow) {
+          baseAmount = selected.isExtraDay ? priceRow.price * billedDays : priceRow.price;
+        }
+      }
+    }
+  }
+  const discountAmount = parseNumber(input.discountAmount ?? "0");
+  const selectedExtrasPayload = parseSelectedExtrasPayload(String(input.selectedExtrasPayload ?? ""));
+  const computedExtras = calculateExtrasFromSelection(
+    {
+      selected: selectedExtrasPayload,
+      billedDays,
+      fallbackAmount: parseNumber(input.extrasAmount ?? "0"),
+      fallbackBreakdown: input.extrasBreakdown?.trim() ?? "",
+    },
+    data.vehicleExtras,
+  );
+  const extrasAmount = computedExtras.amount;
+  const fuelAmount = parseNumber(input.fuelAmount ?? "0");
+  const insuranceAmount = parseNumber(input.insuranceAmount ?? "0");
+  const penaltiesAmount = parseNumber(input.penaltiesAmount ?? "0");
+  const calculatedTotal = calculateReservationTotal({
+    baseAmount,
+    discountAmount,
+    extrasAmount,
+    fuelAmount,
+    insuranceAmount,
+    penaltiesAmount,
+  });
+  const submittedTotal = parseNumber(input.totalPrice ?? "0");
+  // Si no llega total explícito, se calcula en backend con los componentes.
+  const totalPrice = submittedTotal !== 0 ? submittedTotal : calculatedTotal;
+  const priceBreakdown = [
+    `base:${formatMoney(baseAmount)}`,
+    `descuento:${formatMoney(discountAmount)}`,
+    `extras:${formatMoney(extrasAmount)}`,
+    `combustible:${formatMoney(fuelAmount)}`,
+    `seguro:${formatMoney(insuranceAmount)}`,
+    `penal:${formatMoney(penaltiesAmount)}`,
+    `total:${formatMoney(totalPrice)}`,
+  ].join(", ");
+
+  const branchCode = normalizeBranchCode(input.branchDelivery ?? "");
+  const year = getYear(input.deliveryAt ?? new Date().toISOString());
+  data.counters.reservation += 1;
+  const reservationNumber = `RSV-${year}-${String(data.counters.reservation).padStart(6, "0")}`;
+
+  const reservation: Reservation = {
+    id: crypto.randomUUID(),
+    reservationNumber,
+    seriesCode: (input.seriesCode ?? "01").trim() || "01",
+    docType: (input.docType ?? "RESERVA").trim() || "RESERVA",
+    contractType: (input.contractType ?? "STANDARD").trim() || "STANDARD",
+    billingAccountCode: (input.billingAccountCode ?? "").trim(),
+    commissionAccountCode: (input.commissionAccountCode ?? "").trim(),
+    clientAccountCode: (input.clientAccountCode ?? "").trim(),
+    voucherNumber: (input.voucherNumber ?? "").trim(),
+    branchDelivery: input.branchDelivery?.trim() ?? "",
+    customerName:
+      input.customerName?.trim() ||
+      [client?.firstName, client?.lastName].filter(Boolean).join(" ").trim() ||
+      client?.companyName ||
+      "",
+    customerCompany: input.customerCompany?.trim() || client?.companyName || "",
+    customerCommissioner: input.customerCommissioner?.trim() || client?.commissionerName || "",
+    deliveryPlace: input.deliveryPlace?.trim() ?? "",
+    deliveryAt: input.deliveryAt?.trim() ?? "",
+    pickupBranch: input.pickupBranch?.trim() ?? "",
+    pickupPlace: input.pickupPlace?.trim() ?? "",
+    pickupAt: input.pickupAt?.trim() ?? "",
+    deliveryFlightNumber: input.deliveryFlightNumber?.trim() ?? "",
+    pickupFlightNumber: input.pickupFlightNumber?.trim() ?? "",
+    billedCarGroup,
+    modelRequested: (input.modelRequested ?? "").trim(),
+    assignedPlate: input.assignedPlate?.trim().toUpperCase() ?? "",
+    vehicleKeyCode: (input.vehicleKeyCode ?? "").trim(),
+    billedDays,
+    billedGroupOverride: (input.billedGroupOverride ?? "").trim(),
+    assignedVehicleGroup: (input.assignedVehicleGroup ?? "").trim(),
+    priceBreakdown,
+    extrasBreakdown: computedExtras.breakdown,
+    baseAmount,
+    discountAmount,
+    extrasAmount,
+    fuelAmount,
+    insuranceAmount,
+    penaltiesAmount,
+    fuelPolicy: input.fuelPolicy?.trim() ?? "",
+    additionalDrivers: input.additionalDrivers?.trim() ?? "",
+    appliedRate,
+    publicNotes: input.publicNotes?.trim() ?? "",
+    privateNotes: input.privateNotes?.trim() ?? "",
+    deductible: input.deductible?.trim() ?? "",
+    depositAmount: parseNumber(input.depositAmount ?? "0"),
+    privateObservations: (input.privateObservations ?? "").trim(),
+    publicObservations: (input.publicObservations ?? "").trim(),
+    referenceCode: (input.referenceCode ?? "").trim(),
+    dnhcCode: (input.dnhcCode ?? "").trim(),
+    blockPlateForReservation: input.blockPlateForReservation === "true",
+    paymentsMade: parseNumber(input.paymentsMade ?? "0"),
+    totalPrice,
+    salesChannel: input.salesChannel?.trim() || client?.acquisitionChannel || "",
+    ivaPercent: input.ivaPercent ? parseNumber(input.ivaPercent) : data.companySettings.defaultIvaPercent,
+    createdAt: new Date().toISOString(),
+    createdBy: actor.id,
+    contractId: null,
+    reservationStatus: input.reservationStatus === "PETICION" ? "PETICION" : "CONFIRMADA",
+    groupOverrideAccepted: false,
+    groupOverrideReason: "",
+    groupOverridePriceAdjustment: 0,
+    groupOverridePriceAdjustedAt: "",
+    confirmationSentLog: [],
+    customerId: client?.id ?? null,
+  };
+
+  if (!reservation.customerName || !reservation.deliveryAt || !reservation.pickupAt || !reservation.branchDelivery) {
+    throw new Error("Faltan campos obligatorios de reserva");
+  }
+  if (!reservation.billedDays) {
+    const dStart = parseDateSafe(reservation.deliveryAt);
+    const dEnd = parseDateSafe(reservation.pickupAt);
+    const ms = 1000 * 60 * 60 * 24;
+    reservation.billedDays = dStart && dEnd ? Math.max(1, Math.ceil((dEnd.getTime() - dStart.getTime()) / ms)) : 1;
+  }
+
+  if (!reservation.assignedPlate && reservation.billedCarGroup && reservation.deliveryAt && reservation.pickupAt) {
+    const autoPlate = findFirstAvailablePlateForGroup(data, {
+      requestedGroup: reservation.billedCarGroup,
+      startAt: reservation.deliveryAt,
+      endAt: reservation.pickupAt,
+    });
+    if (autoPlate) {
+      reservation.assignedPlate = autoPlate;
+      const autoVehicle = data.fleetVehicles.find((item) => item.plate.toUpperCase() === autoPlate) ?? null;
+      const autoCategory = autoVehicle ? data.vehicleCategories.find((item) => item.id === autoVehicle.categoryId) ?? null : null;
+      reservation.assignedVehicleGroup = autoCategory?.code || autoCategory?.name || reservation.assignedVehicleGroup;
+      await appendAuditEvent({
+        timestamp: new Date().toISOString(),
+        action: "SYSTEM",
+        actorId: actor.id,
+        actorRole: actor.role,
+        entity: "reservation_auto_assignment",
+        entityId: reservation.id,
+        details: { reservationNumber, assignedPlate: autoPlate, billedCarGroup: reservation.billedCarGroup },
+      });
+    }
+  }
+
+  if (reservation.assignedPlate) {
+    const assignedCheck = ensureAssignedPlateAvailabilityForReservation({
+      assignedPlate: reservation.assignedPlate,
+      deliveryAt: reservation.deliveryAt,
+      fleetVehicles: data.fleetVehicles,
+    });
+    if (assignedCheck.found && assignedCheck.vehicle) {
+      const vehicleCategory = data.vehicleCategories.find((item) => item.id === assignedCheck.vehicle.categoryId);
+      reservation.assignedVehicleGroup = vehicleCategory?.code || vehicleCategory?.name || "";
+      if (assignedCheck.warningLimit) {
+        await appendAuditEvent({
+          timestamp: new Date().toISOString(),
+          action: "SYSTEM",
+          actorId: actor.id,
+          actorRole: actor.role,
+          entity: "reservation_vehicle_limit_warning",
+          entityId: reservation.id,
+          details: {
+            reservationNumber,
+            plate: reservation.assignedPlate,
+            activeUntil: assignedCheck.vehicle.activeUntil,
+            deliveryAt: reservation.deliveryAt,
+          },
+        });
+      }
+    }
+  }
+
+  if (reservation.reservationStatus === "CONFIRMADA") {
+    const toEmail = (client?.email ?? "").trim();
+    if (!toEmail) {
+      await appendAuditEvent({
+        timestamp: new Date().toISOString(),
+        action: "SYSTEM",
+        actorId: actor.id,
+        actorRole: actor.role,
+        entity: "reservation_confirmation",
+        entityId: reservation.id,
+        details: {
+          reservationNumber,
+          mode: "auto_on_create",
+          status: "ERROR",
+          failureReason: "Cliente sin email",
+        },
+      });
+      throw new Error("Reserva confirmada requiere email de cliente");
+    }
+    const mailFrom = data.companySettings.companyEmailFrom !== "N/D" ? data.companySettings.companyEmailFrom : undefined;
+    const templateHtml = resolveReservationConfirmationTemplateHtml(data.templates, client?.language || "es");
+    try {
+      await sendMailFromCompany({
+        fromOverride: mailFrom,
+        to: toEmail,
+        subject: `Confirmacion reserva ${reservation.reservationNumber}`,
+        html: buildReservationConfirmationHtml(reservation, {
+          companyName: data.companySettings.companyName,
+          templateHtml,
+        }),
+      });
+      reservation.confirmationSentLog.push({
+        sentAt: new Date().toISOString(),
+        sentBy: actor.id,
+        to: toEmail,
+        status: "ENVIADA",
+      });
+    } catch (error) {
+      await appendAuditEvent({
+        timestamp: new Date().toISOString(),
+        action: "SYSTEM",
+        actorId: actor.id,
+        actorRole: actor.role,
+        entity: "reservation_confirmation",
+        entityId: reservation.id,
+        details: {
+          reservationNumber,
+          mode: "auto_on_create",
+          status: "ERROR",
+          toEmail,
+          failureReason: error instanceof Error ? error.message : "Fallo SMTP",
+        },
+      });
+      throw error;
+    }
+  }
+
+  data.reservations.push(reservation);
+  await writeRentalData(data);
+
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "reservation",
+    entityId: reservation.id,
+    details: { reservationNumber, branchCode },
+  });
+
+  if (reservation.reservationStatus === "CONFIRMADA" && reservation.confirmationSentLog.length > 0) {
+    await appendAuditEvent({
+      timestamp: new Date().toISOString(),
+      action: "SYSTEM",
+      actorId: actor.id,
+      actorRole: actor.role,
+      entity: "reservation_confirmation",
+      entityId: reservation.id,
+      details: { reservationNumber, toEmail: reservation.confirmationSentLog[0].to, mode: "auto_on_create" },
+    });
+  }
+
+}
+
+export async function updateReservation(
+  reservationId: string,
+  input: Record<string, string>,
+  actor: { id: string; role: RoleName },
+) {
+  const data = await readRentalData();
+  const reservation = data.reservations.find((item) => item.id === reservationId);
+  if (!reservation) {
+    throw new Error("Reserva no encontrada");
+  }
+
+  reservation.customerName = (input.customerName ?? reservation.customerName).trim();
+  reservation.branchDelivery = (input.branchDelivery ?? reservation.branchDelivery).trim();
+  reservation.deliveryPlace = (input.deliveryPlace ?? reservation.deliveryPlace).trim();
+  reservation.deliveryAt = (input.deliveryAt ?? reservation.deliveryAt).trim();
+  reservation.pickupBranch = (input.pickupBranch ?? reservation.pickupBranch).trim();
+  reservation.pickupPlace = (input.pickupPlace ?? reservation.pickupPlace).trim();
+  reservation.pickupAt = (input.pickupAt ?? reservation.pickupAt).trim();
+  reservation.billedCarGroup = (input.billedCarGroup ?? reservation.billedCarGroup).trim();
+  reservation.assignedPlate = (input.assignedPlate ?? reservation.assignedPlate).trim().toUpperCase();
+  reservation.publicNotes = (input.publicNotes ?? reservation.publicNotes).trim();
+  reservation.privateNotes = (input.privateNotes ?? reservation.privateNotes).trim();
+  reservation.reservationStatus = input.reservationStatus === "PETICION" ? "PETICION" : "CONFIRMADA";
+  const selectedExtrasPayload = parseSelectedExtrasPayload(String(input.selectedExtrasPayload ?? ""));
+  const computedExtras = calculateExtrasFromSelection(
+    {
+      selected: selectedExtrasPayload,
+      billedDays: reservation.billedDays || 1,
+      fallbackAmount: parseNumber(input.extrasAmount ?? String(reservation.extrasAmount)),
+      fallbackBreakdown: (input.extrasBreakdown ?? reservation.extrasBreakdown).trim(),
+    },
+    data.vehicleExtras,
+  );
+  reservation.extrasAmount = computedExtras.amount;
+  reservation.extrasBreakdown = computedExtras.breakdown;
+  reservation.baseAmount = input.baseAmount ? parseNumber(input.baseAmount) : reservation.baseAmount;
+  reservation.discountAmount = input.discountAmount ? parseNumber(input.discountAmount) : reservation.discountAmount;
+  reservation.fuelAmount = input.fuelAmount ? parseNumber(input.fuelAmount) : reservation.fuelAmount;
+  reservation.insuranceAmount = input.insuranceAmount ? parseNumber(input.insuranceAmount) : reservation.insuranceAmount;
+  reservation.penaltiesAmount = input.penaltiesAmount ? parseNumber(input.penaltiesAmount) : reservation.penaltiesAmount;
+  const totalCalculated = calculateReservationTotal({
+    baseAmount: reservation.baseAmount,
+    discountAmount: reservation.discountAmount,
+    extrasAmount: reservation.extrasAmount,
+    fuelAmount: reservation.fuelAmount,
+    insuranceAmount: reservation.insuranceAmount,
+    penaltiesAmount: reservation.penaltiesAmount,
+  });
+  reservation.totalPrice = input.totalPrice ? parseNumber(input.totalPrice) : totalCalculated;
+  reservation.priceBreakdown = [
+    `base:${formatMoney(reservation.baseAmount)}`,
+    `descuento:${formatMoney(reservation.discountAmount)}`,
+    `extras:${formatMoney(reservation.extrasAmount)}`,
+    `combustible:${formatMoney(reservation.fuelAmount)}`,
+    `seguro:${formatMoney(reservation.insuranceAmount)}`,
+    `penal:${formatMoney(reservation.penaltiesAmount)}`,
+    `total:${formatMoney(reservation.totalPrice)}`,
+  ].join(", ");
+
+  if (reservation.assignedPlate) {
+    const assignedCheck = ensureAssignedPlateAvailabilityForReservation({
+      assignedPlate: reservation.assignedPlate,
+      deliveryAt: reservation.deliveryAt,
+      fleetVehicles: data.fleetVehicles,
+    });
+    if (assignedCheck.warningLimit && assignedCheck.vehicle) {
+      await appendAuditEvent({
+        timestamp: new Date().toISOString(),
+        action: "SYSTEM",
+        actorId: actor.id,
+        actorRole: actor.role,
+        entity: "reservation_vehicle_limit_warning",
+        entityId: reservation.id,
+        details: {
+          reservationNumber: reservation.reservationNumber,
+          plate: reservation.assignedPlate,
+          activeUntil: assignedCheck.vehicle.activeUntil,
+          deliveryAt: reservation.deliveryAt,
+        },
+      });
+    }
+  }
+
+  await writeRentalData(data);
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "reservation_update",
+    entityId: reservation.id,
+    details: { reservationNumber: reservation.reservationNumber },
+  });
+}
+
+export async function deleteReservation(reservationId: string, actor: { id: string; role: RoleName }) {
+  const data = await readRentalData();
+  const reservation = data.reservations.find((item) => item.id === reservationId);
+  if (!reservation) {
+    throw new Error("Reserva no encontrada");
+  }
+  if (reservation.contractId || data.contracts.some((item) => item.reservationId === reservationId)) {
+    throw new Error("No se puede borrar una reserva con contrato asociado");
+  }
+  data.reservations = data.reservations.filter((item) => item.id !== reservationId);
+  await writeRentalData(data);
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "reservation_delete",
+    entityId: reservationId,
+    details: { reservationNumber: reservation.reservationNumber },
+  });
+}
+
+export async function assignPlateToReservation(
+  reservationId: string,
+  input: Record<string, string>,
+  actor: { id: string; role: RoleName },
+) {
+  const data = await readRentalData();
+  const reservation = data.reservations.find((item) => item.id === reservationId);
+  if (!reservation) {
+    throw new Error("Reserva no encontrada");
+  }
+
+  const plate = (input.assignedPlate ?? "").trim().toUpperCase();
+  if (!plate) {
+    throw new Error("Matrícula obligatoria");
+  }
+  const vehicle = data.fleetVehicles.find((item) => item.plate.toUpperCase() === plate);
+  const vehicleCategory = vehicle ? data.vehicleCategories.find((item) => item.id === vehicle.categoryId) : null;
+  const assignedVehicleGroup = vehicleCategory?.code || vehicleCategory?.name || "";
+  const billedGroup = reservation.billedCarGroup.trim().toUpperCase();
+  const assignedGroupNormalized = assignedVehicleGroup.trim().toUpperCase();
+  const crossGroupAssignment = Boolean(billedGroup && assignedGroupNormalized && billedGroup !== assignedGroupNormalized);
+
+  // Conflictos por solape contra otras reservas y bloqueos manuales.
+  const overlappingReservations = data.reservations.filter((item) => {
+    if (item.id === reservation.id || !item.assignedPlate) {
+      return false;
+    }
+    return (
+      item.assignedPlate.toUpperCase() === plate &&
+      hasOverlap(item.deliveryAt, item.pickupAt, reservation.deliveryAt, reservation.pickupAt)
+    );
+  });
+
+  const overlappingBlocks = data.vehicleBlocks.filter(
+    (block) =>
+      block.vehiclePlate.toUpperCase() === plate &&
+      hasOverlap(block.startAt, block.endAt, reservation.deliveryAt, reservation.pickupAt),
+  );
+
+  const hasConflicts = overlappingReservations.length > 0 || overlappingBlocks.length > 0;
+  const overrideAccepted = input.overrideAccepted === "true";
+  const overrideReason = (input.overrideReason ?? "").trim();
+  const groupOverrideAccepted = input.groupOverrideAccepted === "true";
+  const groupOverrideReason = (input.groupOverrideReason ?? "").trim();
+  const applyPriceAdjustment = input.applyPriceAdjustment === "true";
+  const priceAdjustmentAmount = parseNumber(input.priceAdjustmentAmount ?? "0");
+
+  if (hasConflicts && !overrideAccepted) {
+    throw new Error("Conflicto de solape detectado. Debes confirmar override.");
+  }
+  if (hasConflicts && overrideAccepted && !overrideReason) {
+    throw new Error("Debes indicar motivo de override por solape");
+  }
+  if (crossGroupAssignment && !groupOverrideAccepted) {
+    throw new Error("Vehículo de grupo diferente. Debes confirmar ajuste por cambio de grupo.");
+  }
+  if (crossGroupAssignment && groupOverrideAccepted && !groupOverrideReason) {
+    throw new Error("Debes indicar motivo por cambio de grupo");
+  }
+
+  reservation.assignedPlate = plate;
+  reservation.assignedVehicleGroup = assignedVehicleGroup;
+  reservation.groupOverrideAccepted = crossGroupAssignment ? groupOverrideAccepted : false;
+  reservation.groupOverrideReason = crossGroupAssignment ? groupOverrideReason : "";
+  if (crossGroupAssignment && applyPriceAdjustment && priceAdjustmentAmount !== 0) {
+    reservation.groupOverridePriceAdjustment += priceAdjustmentAmount;
+    reservation.totalPrice += priceAdjustmentAmount;
+    reservation.groupOverridePriceAdjustedAt = new Date().toISOString();
+    reservation.priceBreakdown = [
+      reservation.priceBreakdown,
+      `ajuste_grupo:${formatMoney(priceAdjustmentAmount)}`,
+      `total_actualizado:${formatMoney(reservation.totalPrice)}`,
+    ]
+      .filter(Boolean)
+      .join(", ");
+  }
+  await writeRentalData(data);
+
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: hasConflicts ? "OVERRIDE_CONFIRMATION" : "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "reservation_plate_assignment",
+    entityId: reservation.id,
+    details: {
+      assignedPlate: plate,
+      conflicts: {
+        reservations: overlappingReservations.map((item) => item.reservationNumber),
+        blocks: overlappingBlocks.map((item) => item.id),
+      },
+      overrideReason,
+      billedCarGroup: reservation.billedCarGroup,
+      assignedVehicleGroup,
+      groupOverrideAccepted,
+      groupOverrideReason,
+      applyPriceAdjustment,
+      priceAdjustmentAmount,
+    },
+  });
+}
+
+export async function createVehicleBlock(input: Record<string, string>, actor: { id: string; role: RoleName }) {
+  const data = await readRentalData();
+  const plate = (input.vehiclePlate ?? "").trim().toUpperCase();
+  const startAt = (input.startAt ?? "").trim();
+  const endAt = (input.endAt ?? "").trim();
+  const reason = (input.reason ?? "").trim();
+
+  if (!plate || !startAt || !endAt) {
+    throw new Error("Faltan campos obligatorios del bloqueo");
+  }
+
+  // Reutiliza misma regla de solapes y override que en asignación de matrícula.
+  const overlapsReservations = data.reservations.filter(
+    (reservation) =>
+      reservation.assignedPlate.toUpperCase() === plate &&
+      hasOverlap(startAt, endAt, reservation.deliveryAt, reservation.pickupAt),
+  );
+
+  const overlapsBlocks = data.vehicleBlocks.filter(
+    (block) => block.vehiclePlate.toUpperCase() === plate && hasOverlap(startAt, endAt, block.startAt, block.endAt),
+  );
+
+  const hasConflicts = overlapsReservations.length > 0 || overlapsBlocks.length > 0;
+  const overrideAccepted = input.overrideAccepted === "true";
+  const overrideReason = (input.overrideReason ?? "").trim();
+
+  if (hasConflicts && !overrideAccepted) {
+    throw new Error("Bloqueo en conflicto. Debes confirmar override.");
+  }
+  if (hasConflicts && overrideAccepted && !overrideReason) {
+    throw new Error("Debes indicar motivo de override en bloqueo");
+  }
+
+  const block: VehicleBlock = {
+    id: crypto.randomUUID(),
+    vehiclePlate: plate,
+    startAt,
+    endAt,
+    reason,
+    createdAt: new Date().toISOString(),
+    createdBy: actor.id,
+  };
+
+  data.vehicleBlocks.push(block);
+  await writeRentalData(data);
+
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: hasConflicts ? "OVERRIDE_CONFIRMATION" : "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "vehicle_block",
+    entityId: block.id,
+    details: {
+      vehiclePlate: plate,
+      startAt,
+      endAt,
+      overrideReason,
+      conflicts: {
+        reservations: overlapsReservations.map((item) => item.reservationNumber),
+        blocks: overlapsBlocks.map((item) => item.id),
+      },
+    },
+  });
+}
+
+// -------------------- Contratos y cierre con factura --------------------
+export async function convertReservationToContract(
+  reservationId: string,
+  actor: { id: string; role: RoleName },
+  input: Record<string, string> = {},
+) {
+  const data = await readRentalData();
+  const reservation = data.reservations.find((item) => item.id === reservationId);
+
+  if (!reservation) {
+    throw new Error("Reserva no encontrada");
+  }
+
+  if (reservation.contractId) {
+    throw new Error("La reserva ya tiene contrato asociado");
+  }
+
+  if (!reservation.assignedPlate && reservation.billedCarGroup && reservation.deliveryAt && reservation.pickupAt) {
+    const autoPlate = findFirstAvailablePlateForGroup(data, {
+      requestedGroup: reservation.billedCarGroup,
+      startAt: reservation.deliveryAt,
+      endAt: reservation.pickupAt,
+      excludeReservationId: reservation.id,
+    });
+    if (autoPlate) {
+      reservation.assignedPlate = autoPlate;
+      const autoVehicle = data.fleetVehicles.find((item) => item.plate.toUpperCase() === autoPlate) ?? null;
+      const autoCategory = autoVehicle ? data.vehicleCategories.find((item) => item.id === autoVehicle.categoryId) ?? null : null;
+      reservation.assignedVehicleGroup = autoCategory?.code || autoCategory?.name || reservation.assignedVehicleGroup;
+    }
+  }
+
+  const plate = reservation.assignedPlate.trim().toUpperCase();
+  const overlappingReservations = plate
+    ? data.reservations.filter((item) => {
+        if (item.id === reservation.id || !item.assignedPlate) {
+          return false;
+        }
+        return item.assignedPlate.toUpperCase() === plate && hasOverlap(item.deliveryAt, item.pickupAt, reservation.deliveryAt, reservation.pickupAt);
+      })
+    : [];
+  const overlappingContracts = plate
+    ? data.contracts.filter((item) => {
+        if (!item.vehiclePlate) {
+          return false;
+        }
+        return item.vehiclePlate.toUpperCase() === plate && hasOverlap(item.deliveryAt, item.pickupAt, reservation.deliveryAt, reservation.pickupAt);
+      })
+    : [];
+  const overlappingBlocks = plate
+    ? data.vehicleBlocks.filter(
+        (block) =>
+          block.vehiclePlate.toUpperCase() === plate &&
+          hasOverlap(block.startAt, block.endAt, reservation.deliveryAt, reservation.pickupAt),
+      )
+    : [];
+  const hasConflicts = overlappingReservations.length > 0 || overlappingContracts.length > 0 || overlappingBlocks.length > 0;
+  const overrideAccepted = input.overrideAccepted === "true";
+  const overrideReason = (input.overrideReason ?? "").trim();
+  if (hasConflicts && !overrideAccepted) {
+    throw new Error("Conflicto de solape al contratar. Debes confirmar override.");
+  }
+  if (hasConflicts && overrideAccepted && !overrideReason) {
+    throw new Error("Debes indicar motivo de override al contratar");
+  }
+
+  // Numeración secuencial por año+sucursal para trazabilidad contable.
+  const branch = normalizeBranchCode(reservation.branchDelivery);
+  const year = getYear(reservation.deliveryAt);
+  const yearShort = getYearShort(reservation.deliveryAt);
+  const key = `${year}-${branch}`;
+  const currentCounter = data.counters.contractByYearBranch[key] ?? 0;
+  const nextCounter = currentCounter + 1;
+  data.counters.contractByYearBranch[key] = nextCounter;
+
+  const contract: Contract = {
+    id: crypto.randomUUID(),
+    contractNumber: buildContractNumber(yearShort, branch, nextCounter),
+    reservationId: reservation.id,
+    branchCode: branch,
+    customerName: reservation.customerName,
+    companyName: reservation.customerCompany,
+    deliveryAt: reservation.deliveryAt,
+    pickupAt: reservation.pickupAt,
+    vehiclePlate: reservation.assignedPlate,
+    billedCarGroup: reservation.billedCarGroup,
+    status: "ABIERTO",
+    priceBreakdown: reservation.priceBreakdown,
+    extrasBreakdown: reservation.extrasBreakdown,
+    baseAmount: reservation.baseAmount,
+    discountAmount: reservation.discountAmount,
+    extrasAmount: reservation.extrasAmount,
+    fuelAmount: reservation.fuelAmount,
+    insuranceAmount: reservation.insuranceAmount,
+    penaltiesAmount: reservation.penaltiesAmount,
+    ivaPercent: reservation.ivaPercent,
+    paymentsMade: reservation.paymentsMade,
+    totalSettlement: reservation.totalPrice,
+    deductible: reservation.deductible,
+    additionalDrivers: reservation.additionalDrivers,
+    privateNotes: reservation.privateNotes,
+    cashRecord: null,
+    internalExpenseIds: [],
+    checkOutAt: null,
+    checkOutBy: "",
+    checkOutKm: 0,
+    checkOutFuelLevel: "",
+    checkOutNotes: "",
+    checkOutPhotos: "",
+    checkInAt: null,
+    checkInBy: "",
+    checkInKm: 0,
+    checkInFuelLevel: "",
+    checkInNotes: "",
+    checkInPhotos: "",
+    createdAt: new Date().toISOString(),
+    createdBy: actor.id,
+    closedAt: null,
+    invoiceId: null,
+  };
+
+  reservation.contractId = contract.id;
+  data.contracts.push(contract);
+  await writeRentalData(data);
+
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: hasConflicts ? "OVERRIDE_CONFIRMATION" : "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "contract",
+    entityId: contract.id,
+    details: {
+      sourceReservationId: reservation.id,
+      contractNumber: contract.contractNumber,
+      snapshot: {
+        baseAmount: contract.baseAmount,
+        discountAmount: contract.discountAmount,
+        extrasAmount: contract.extrasAmount,
+        fuelAmount: contract.fuelAmount,
+        insuranceAmount: contract.insuranceAmount,
+        penaltiesAmount: contract.penaltiesAmount,
+        totalSettlement: contract.totalSettlement,
+        ivaPercent: contract.ivaPercent,
+      },
+      autoAssignedPlate: contract.vehiclePlate || "",
+      warningWithoutPlate: contract.vehiclePlate ? false : true,
+      conflicts: {
+        reservations: overlappingReservations.map((item) => item.reservationNumber),
+        contracts: overlappingContracts.map((item) => item.contractNumber),
+        blocks: overlappingBlocks.map((item) => item.id),
+      },
+      overrideReason,
+    },
+  });
+}
+
+export async function getContractByNumber(contractNumber: string): Promise<Contract | null> {
+  const data = await readRentalData();
+  const normalized = contractNumber.trim().toUpperCase();
+  if (!normalized) return null;
+  return data.contracts.find((item) => item.contractNumber.trim().toUpperCase() === normalized) ?? null;
+}
+
+export async function createContractFromScratch(input: Record<string, string>, actor: { id: string; role: RoleName }) {
+  await createReservation(
+    {
+      ...input,
+      reservationStatus: "PETICION",
+      assignedPlate: (input.assignedPlate ?? "").trim().toUpperCase(),
+      customerName: input.customerName ?? "",
+      branchDelivery: input.branchDelivery ?? "",
+      pickupBranch: input.pickupBranch ?? input.branchDelivery ?? "",
+      deliveryAt: input.deliveryAt ?? "",
+      pickupAt: input.pickupAt ?? "",
+      billedCarGroup: input.billedCarGroup ?? "",
+      totalPrice: input.totalPrice ?? "0",
+      salesChannel: input.salesChannel ?? "",
+    },
+    actor,
+  );
+
+  const dataAfterReservation = await readRentalData();
+  const reservation = dataAfterReservation.reservations
+    .filter((item) => item.createdBy === actor.id && !item.contractId)
+    .toSorted((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+  if (!reservation) {
+    throw new Error("No se pudo localizar la reserva base del contrato");
+  }
+
+  await convertReservationToContract(reservation.id, actor, {
+    overrideAccepted: input.overrideAccepted ?? "false",
+    overrideReason: input.overrideReason ?? "",
+  });
+
+  const data = await readRentalData();
+  const contract = data.contracts.find((item) => item.reservationId === reservation.id) ?? null;
+  if (!contract) {
+    throw new Error("No se pudo generar contrato desde creación manual");
+  }
+  return contract;
+}
+
+export async function renumberContract(
+  contractId: string,
+  input: Record<string, string>,
+  actor: { id: string; role: RoleName },
+) {
+  const data = await readRentalData();
+  const contract = data.contracts.find((item) => item.id === contractId);
+  if (!contract) {
+    throw new Error("Contrato no encontrado");
+  }
+  if (contract.status === "CERRADO") {
+    throw new Error("No se puede renumerar un contrato cerrado");
+  }
+
+  const nextBranch = normalizeBranchCode(input.branchCode ?? "");
+  if (!nextBranch || nextBranch === "SUC-ND") {
+    throw new Error("Sucursal destino obligatoria");
+  }
+  const year = getYear(contract.deliveryAt);
+  const yearShort = getYearShort(contract.deliveryAt);
+  const key = `${year}-${nextBranch}`;
+  let counter = (data.counters.contractByYearBranch[key] ?? 0) + 1;
+  let candidate = buildContractNumber(yearShort, nextBranch, counter);
+  while (data.contracts.some((item) => item.id !== contract.id && item.contractNumber === candidate)) {
+    counter += 1;
+    candidate = buildContractNumber(yearShort, nextBranch, counter);
+  }
+  data.counters.contractByYearBranch[key] = counter;
+
+  const previousContractNumber = contract.contractNumber;
+  const previousBranchCode = contract.branchCode;
+  contract.contractNumber = candidate;
+  contract.branchCode = nextBranch;
+
+  await writeRentalData(data);
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "contract_renumber",
+    entityId: contract.id,
+    details: {
+      previousContractNumber,
+      nextContractNumber: candidate,
+      previousBranchCode,
+      nextBranchCode: nextBranch,
+      reason: (input.reason ?? "").trim(),
+    },
+  });
+
+  return contract;
+}
+
+function resolveReservationConfirmationTemplateHtml(
+  templates: Array<{ templateType: string; language: string; htmlContent: string; active: boolean }>,
+  language: string,
+): string {
+  const lang = language.toLowerCase();
+  return (
+    templates.find((item) => item.templateType === "CONFIRMACION_RESERVA" && item.language === lang && item.active)?.htmlContent ??
+    templates.find((item) => item.templateType === "CONFIRMACION_RESERVA" && item.language === "es" && item.active)?.htmlContent ??
+    ""
+  );
+}
+
+function renderSimpleTemplate(template: string, data: Record<string, string>) {
+  return template.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_full, key: string) => data[key] ?? "");
+}
+
+function buildReservationConfirmationHtml(
+  reservation: Reservation,
+  input?: { companyName?: string; templateHtml?: string },
+): string {
+  const fallback = `
+    <html>
+      <body style="font-family:Segoe UI, Arial, sans-serif; color:#111827;">
+        <h2>Confirmacion de reserva ${reservation.reservationNumber}</h2>
+        <p><strong>Empresa:</strong> ${input?.companyName || "N/D"}</p>
+        <p><strong>Cliente:</strong> ${reservation.customerName || "N/D"}</p>
+        <p><strong>Entrega:</strong> ${reservation.deliveryAt || "N/D"} - ${reservation.deliveryPlace || "N/D"}</p>
+        <p><strong>Recogida:</strong> ${reservation.pickupAt || "N/D"} - ${reservation.pickupPlace || "N/D"}</p>
+        <p><strong>Grupo reservado:</strong> ${reservation.billedCarGroup || "N/D"}</p>
+        <p><strong>Total previsto:</strong> ${reservation.totalPrice.toFixed(2)}</p>
+      </body>
+    </html>
+  `;
+  if (!input?.templateHtml) {
+    return fallback;
+  }
+  return renderSimpleTemplate(input.templateHtml, {
+    company_name: input.companyName || "N/D",
+    reservation_number: reservation.reservationNumber,
+    customer_name: reservation.customerName || "N/D",
+    delivery_at: reservation.deliveryAt || "N/D",
+    delivery_place: reservation.deliveryPlace || "N/D",
+    pickup_at: reservation.pickupAt || "N/D",
+    pickup_place: reservation.pickupPlace || "N/D",
+    billed_car_group: reservation.billedCarGroup || "N/D",
+    assigned_plate: reservation.assignedPlate || "N/D",
+    total_amount: reservation.totalPrice.toFixed(2),
+    sales_channel: reservation.salesChannel || "N/D",
+  });
+}
+
+export async function sendReservationConfirmation(
+  reservationId: string,
+  input: Record<string, string>,
+  actor: { id: string; role: RoleName },
+) {
+  const data = await readRentalData();
+  const reservation = data.reservations.find((item) => item.id === reservationId);
+  if (!reservation) {
+    throw new Error("Reserva no encontrada");
+  }
+  const customer = reservation.customerId ? data.clients.find((item) => item.id === reservation.customerId) : null;
+  const toEmail = (input.toEmail ?? "").trim() || customer?.email?.trim() || "";
+  if (!toEmail) {
+    throw new Error("No hay email en cliente para enviar confirmacion");
+  }
+
+  const settings = data.companySettings;
+  const mailFrom = settings.companyEmailFrom !== "N/D" ? settings.companyEmailFrom : undefined;
+  const templateHtml = resolveReservationConfirmationTemplateHtml(data.templates, customer?.language || "es");
+
+  try {
+    await sendMailFromCompany({
+      fromOverride: mailFrom,
+      to: toEmail,
+      subject: `Confirmacion reserva ${reservation.reservationNumber}`,
+      html: buildReservationConfirmationHtml(reservation, {
+        companyName: data.companySettings.companyName,
+        templateHtml,
+      }),
+    });
+    reservation.confirmationSentLog.push({
+      sentAt: new Date().toISOString(),
+      sentBy: actor.id,
+      to: toEmail,
+      status: "ENVIADA",
+    });
+  } catch {
+    reservation.confirmationSentLog.push({
+      sentAt: new Date().toISOString(),
+      sentBy: actor.id,
+      to: toEmail,
+      status: "ERROR",
+    });
+    await writeRentalData(data);
+    throw new Error("Fallo al enviar confirmacion");
+  }
+
+  await writeRentalData(data);
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "reservation_confirmation",
+    entityId: reservation.id,
+    details: { reservationNumber: reservation.reservationNumber, toEmail },
+  });
+}
+
+export async function listReservationConfirmationLogs(input: { from: string; to: string }) {
+  const data = await readRentalData();
+  return data.reservations.flatMap((reservation) =>
+    reservation.confirmationSentLog
+      .filter((log) => isInsideRange(log.sentAt, `${input.from}T00:00:00`, `${input.to}T23:59:59`))
+      .map((log) => ({
+        reservationId: reservation.id,
+        reservationNumber: reservation.reservationNumber,
+        customerName: reservation.customerName,
+        sentAt: log.sentAt,
+        sentBy: log.sentBy,
+        to: log.to,
+        status: log.status,
+      })),
+  );
+}
+
+export async function registerContractCash(
+  contractId: string,
+  input: Record<string, string>,
+  actor: { id: string; role: RoleName },
+) {
+  const data = await readRentalData();
+  const contract = data.contracts.find((item) => item.id === contractId);
+
+  if (!contract) {
+    throw new Error("Contrato no encontrado");
+  }
+
+  if (contract.status === "CERRADO") {
+    throw new Error("Contrato ya cerrado");
+  }
+
+  const methodRaw = (input.method ?? "").toUpperCase();
+  const method = (["EFECTIVO", "TARJETA", "TRANSFERENCIA", "OTRO"] as const).includes(
+    methodRaw as "EFECTIVO" | "TARJETA" | "TRANSFERENCIA" | "OTRO",
+  )
+    ? (methodRaw as "EFECTIVO" | "TARJETA" | "TRANSFERENCIA" | "OTRO")
+    : "OTRO";
+  const amount = parseNumber(input.amount ?? "0");
+  const cardLast4 = (input.cardLast4 ?? "").trim();
+  if (amount <= 0) {
+    throw new Error("Importe de caja debe ser mayor que 0");
+  }
+  if (method === "TARJETA" && !/^\d{4}$/.test(cardLast4)) {
+    throw new Error("En pago con tarjeta debes indicar últimos 4 dígitos");
+  }
+
+  contract.cashRecord = {
+    amount,
+    method,
+    cardLast4,
+    notes: (input.notes ?? "").trim(),
+    createdAt: new Date().toISOString(),
+    createdBy: actor.id,
+  };
+  contract.paymentsMade = amount;
+
+  await writeRentalData(data);
+
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "contract_cash",
+    entityId: contract.id,
+    details: { contractNumber: contract.contractNumber, amount: contract.cashRecord.amount, method },
+  });
+}
+
+export async function registerContractCheckOut(
+  contractId: string,
+  input: Record<string, string>,
+  actor: { id: string; role: RoleName },
+) {
+  const data = await readRentalData();
+  const contract = data.contracts.find((item) => item.id === contractId);
+  if (!contract) {
+    throw new Error("Contrato no encontrado");
+  }
+  if (contract.status === "CERRADO") {
+    throw new Error("No se puede hacer checkout sobre contrato cerrado");
+  }
+  contract.checkOutAt = new Date().toISOString();
+  contract.checkOutBy = actor.id;
+  contract.checkOutKm = parseNumber(input.km ?? "0");
+  contract.checkOutFuelLevel = (input.fuelLevel ?? "").trim();
+  contract.checkOutNotes = (input.notes ?? "").trim();
+  contract.checkOutPhotos = (input.photos ?? "").trim();
+  await writeRentalData(data);
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "contract_checkout",
+    entityId: contract.id,
+    details: {
+      contractNumber: contract.contractNumber,
+      km: contract.checkOutKm,
+      fuelLevel: contract.checkOutFuelLevel,
+    },
+  });
+}
+
+export async function registerContractCheckIn(
+  contractId: string,
+  input: Record<string, string>,
+  actor: { id: string; role: RoleName },
+) {
+  const data = await readRentalData();
+  const contract = data.contracts.find((item) => item.id === contractId);
+  if (!contract) {
+    throw new Error("Contrato no encontrado");
+  }
+  if (contract.status === "CERRADO") {
+    throw new Error("Contrato ya cerrado");
+  }
+  contract.checkInAt = new Date().toISOString();
+  contract.checkInBy = actor.id;
+  contract.checkInKm = parseNumber(input.km ?? "0");
+  contract.checkInFuelLevel = (input.fuelLevel ?? "").trim();
+  contract.checkInNotes = (input.notes ?? "").trim();
+  contract.checkInPhotos = (input.photos ?? "").trim();
+  await writeRentalData(data);
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "contract_checkin",
+    entityId: contract.id,
+    details: {
+      contractNumber: contract.contractNumber,
+      km: contract.checkInKm,
+      fuelLevel: contract.checkInFuelLevel,
+    },
+  });
+}
+
+export async function changeContractVehicle(
+  contractId: string,
+  input: Record<string, string>,
+  actor: { id: string; role: RoleName },
+) {
+  const data = await readRentalData();
+  const contract = data.contracts.find((item) => item.id === contractId);
+  if (!contract) {
+    throw new Error("Contrato no encontrado");
+  }
+  if (contract.status === "CERRADO") {
+    throw new Error("No se puede cambiar vehículo en contrato cerrado");
+  }
+
+  const nextPlate = (input.vehiclePlate ?? "").trim().toUpperCase();
+  if (!nextPlate) {
+    throw new Error("Matrícula obligatoria");
+  }
+
+  const fleetVehicle = data.fleetVehicles.find((item) => item.plate.toUpperCase() === nextPlate);
+  if (!fleetVehicle) {
+    throw new Error("La matrícula no existe en flota activa");
+  }
+
+  const conflictsByContract = data.contracts.filter((item) => {
+    if (item.id === contract.id || !item.vehiclePlate) {
+      return false;
+    }
+    return (
+      item.vehiclePlate.toUpperCase() === nextPlate &&
+      item.status === "ABIERTO" &&
+      hasOverlap(item.deliveryAt, item.pickupAt, contract.deliveryAt, contract.pickupAt)
+    );
+  });
+
+  const conflictsByReservation = data.reservations.filter((item) => {
+    if (!item.assignedPlate || item.id === contract.reservationId) {
+      return false;
+    }
+    return item.assignedPlate.toUpperCase() === nextPlate && hasOverlap(item.deliveryAt, item.pickupAt, contract.deliveryAt, contract.pickupAt);
+  });
+
+  const conflictsByBlock = data.vehicleBlocks.filter(
+    (block) =>
+      block.vehiclePlate.toUpperCase() === nextPlate &&
+      hasOverlap(block.startAt, block.endAt, contract.deliveryAt, contract.pickupAt),
+  );
+
+  const hasConflicts = conflictsByContract.length > 0 || conflictsByReservation.length > 0 || conflictsByBlock.length > 0;
+  const overrideAccepted = input.overrideAccepted === "true";
+  const overrideReason = (input.overrideReason ?? "").trim();
+  if (hasConflicts && !overrideAccepted) {
+    throw new Error("Vehículo no disponible en esas fechas. Debes confirmar override.");
+  }
+  if (hasConflicts && overrideAccepted && !overrideReason) {
+    throw new Error("Debes indicar motivo de override para cambiar vehículo");
+  }
+
+  const previousPlate = contract.vehiclePlate;
+  contract.vehiclePlate = nextPlate;
+  const sourceReservation = data.reservations.find((item) => item.id === contract.reservationId);
+  if (sourceReservation) {
+    sourceReservation.assignedPlate = nextPlate;
+  }
+
+  await writeRentalData(data);
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: hasConflicts ? "OVERRIDE_CONFIRMATION" : "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "contract_vehicle_change",
+    entityId: contract.id,
+    details: {
+      contractNumber: contract.contractNumber,
+      previousPlate,
+      nextPlate,
+      changeAt: (input.changeAt ?? "").trim(),
+      reason: (input.changeReason ?? "").trim(),
+      kmOut: parseNumber(input.kmOut ?? "0"),
+      kmIn: parseNumber(input.kmIn ?? "0"),
+      fuelOut: (input.fuelOut ?? "").trim(),
+      fuelIn: (input.fuelIn ?? "").trim(),
+      notes: (input.notes ?? "").trim(),
+      overrideReason,
+      conflicts: {
+        contracts: conflictsByContract.map((item) => item.contractNumber),
+        reservations: conflictsByReservation.map((item) => item.reservationNumber),
+        blocks: conflictsByBlock.map((item) => item.id),
+      },
+    },
+  });
+}
+
+export async function addInternalExpense(
+  contractId: string,
+  input: Record<string, string>,
+  actor: { id: string; role: RoleName },
+) {
+  const data = await readRentalData();
+  const contract = data.contracts.find((item) => item.id === contractId);
+
+  if (!contract) {
+    throw new Error("Contrato no encontrado");
+  }
+
+  const categoryRaw = (input.category ?? "").toUpperCase();
+  const category = (["PEAJE", "GASOLINA", "COMIDA", "PARKING", "LAVADO", "OTRO"] as const).includes(
+    categoryRaw as "PEAJE" | "GASOLINA" | "COMIDA" | "PARKING" | "LAVADO" | "OTRO",
+  )
+    ? (categoryRaw as "PEAJE" | "GASOLINA" | "COMIDA" | "PARKING" | "LAVADO" | "OTRO")
+    : "OTRO";
+
+  const expense: InternalExpense = {
+    id: crypto.randomUUID(),
+    contractId,
+    vehiclePlate: input.vehiclePlate?.trim() || contract.vehiclePlate,
+    expenseDate: input.expenseDate?.trim() || new Date().toISOString().slice(0, 10),
+    category,
+    amount: parseNumber(input.amount ?? "0"),
+    note: input.note?.trim() ?? "",
+    createdAt: new Date().toISOString(),
+    createdBy: actor.id,
+  };
+
+  data.internalExpenses.push(expense);
+  contract.internalExpenseIds.push(expense.id);
+  await writeRentalData(data);
+
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "internal_expense",
+    entityId: expense.id,
+    details: { contractId, category: expense.category, amount: expense.amount },
+  });
+}
+
+export async function createDailyOperationalExpense(input: Record<string, string>, actor: { id: string; role: RoleName }) {
+  const data = await readRentalData();
+  const categoryRaw = (input.category ?? "").toUpperCase();
+  const category = (["PEAJE", "GASOLINA", "COMIDA", "PARKING", "LAVADO", "OTRO"] as const).includes(
+    categoryRaw as "PEAJE" | "GASOLINA" | "COMIDA" | "PARKING" | "LAVADO" | "OTRO",
+  )
+    ? (categoryRaw as "PEAJE" | "GASOLINA" | "COMIDA" | "PARKING" | "LAVADO" | "OTRO")
+    : "OTRO";
+  const expenseDate = (input.expenseDate ?? "").trim();
+  const workerName = (input.workerName ?? "").trim();
+  const note = (input.note ?? "").trim();
+  const totalAmount = parseNumber(input.amount ?? "0");
+  const rawPlates = (input.vehiclePlates ?? "")
+    .split(/[\n,; ]+/)
+    .map((value) => value.trim().toUpperCase())
+    .filter(Boolean);
+  const plates = Array.from(new Set(rawPlates));
+
+  if (!expenseDate || !parseDateSafe(`${expenseDate}T00:00:00`)) {
+    throw new Error("Fecha de gasto no válida");
+  }
+  if (!workerName) {
+    throw new Error("Empleado obligatorio");
+  }
+  if (totalAmount <= 0) {
+    throw new Error("Importe total debe ser mayor que 0");
+  }
+  if (plates.length === 0) {
+    throw new Error("Debes indicar al menos una matrícula");
+  }
+
+  const fleetSet = new Set(data.fleetVehicles.map((vehicle) => vehicle.plate.toUpperCase()));
+  const invalidPlates = plates.filter((plate) => !fleetSet.has(plate));
+  if (invalidPlates.length > 0) {
+    throw new Error(`Matrículas no válidas en flota: ${invalidPlates.join(", ")}`);
+  }
+
+  const dayStart = `${expenseDate}T00:00:00`;
+  const dayEnd = `${expenseDate}T23:59:59`;
+  const rentedPlates = new Set(
+    data.contracts
+      .filter((contract) => hasOverlap(contract.deliveryAt, contract.pickupAt, dayStart, dayEnd))
+      .map((contract) => contract.vehiclePlate.trim().toUpperCase())
+      .filter(Boolean),
+  );
+  const notRentedPlates = plates.filter((plate) => !rentedPlates.has(plate));
+  if (notRentedPlates.length > 0) {
+    throw new Error(`Solo se permiten matrículas con alquiler activo ese día: ${notRentedPlates.join(", ")}`);
+  }
+
+  const splitAmounts = splitAmountEqually(totalAmount, plates.length);
+  const batchId = crypto.randomUUID();
+  const expenses: InternalExpense[] = plates.map((plate, index) => ({
+    id: crypto.randomUUID(),
+    contractId: "__DIARIO__",
+    vehiclePlate: plate,
+    expenseDate,
+    category,
+    amount: splitAmounts[index] ?? 0,
+    note: `[BATCH:${batchId}] empleado=${workerName}; reparto=${index + 1}/${plates.length}; ${note}`.trim(),
+    createdAt: new Date().toISOString(),
+    createdBy: actor.id,
+  }));
+
+  data.internalExpenses.push(...expenses);
+  await writeRentalData(data);
+
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "daily_operational_expense",
+    entityId: batchId,
+    details: {
+      expenseDate,
+      workerName,
+      category,
+      totalAmount,
+      plates,
+      splitAmounts,
+    },
+  });
+}
+
+export async function updateInternalExpense(
+  expenseId: string,
+  input: Record<string, string>,
+  actor: { id: string; role: RoleName },
+) {
+  const data = await readRentalData();
+  const expense = data.internalExpenses.find((item) => item.id === expenseId);
+  if (!expense) {
+    throw new Error("Gasto no encontrado");
+  }
+  const categoryRaw = (input.category ?? expense.category).toUpperCase();
+  const category = (["PEAJE", "GASOLINA", "COMIDA", "PARKING", "LAVADO", "OTRO"] as const).includes(
+    categoryRaw as "PEAJE" | "GASOLINA" | "COMIDA" | "PARKING" | "LAVADO" | "OTRO",
+  )
+    ? (categoryRaw as "PEAJE" | "GASOLINA" | "COMIDA" | "PARKING" | "LAVADO" | "OTRO")
+    : expense.category;
+
+  const vehiclePlate = (input.vehiclePlate ?? expense.vehiclePlate).trim().toUpperCase();
+  const expenseDate = (input.expenseDate ?? expense.expenseDate).trim();
+  const amount = input.amount ? parseNumber(input.amount) : expense.amount;
+  if (amount <= 0) {
+    throw new Error("Importe debe ser mayor que 0");
+  }
+  if (!data.fleetVehicles.some((item) => item.plate.toUpperCase() === vehiclePlate)) {
+    throw new Error("Matrícula no válida en flota");
+  }
+
+  expense.category = category;
+  expense.vehiclePlate = vehiclePlate;
+  expense.expenseDate = expenseDate;
+  expense.amount = amount;
+
+  if (expense.contractId === "__DIARIO__") {
+    const workerName = (input.workerName ?? parseDailyExpenseMeta(expense.note).workerName).trim();
+    if (!workerName) {
+      throw new Error("Empleado obligatorio");
+    }
+    const dayStart = `${expenseDate}T00:00:00`;
+    const dayEnd = `${expenseDate}T23:59:59`;
+    const hasActiveRental = data.contracts.some(
+      (contract) =>
+        contract.vehiclePlate.toUpperCase() === vehiclePlate.toUpperCase() &&
+        hasOverlap(contract.deliveryAt, contract.pickupAt, dayStart, dayEnd),
+    );
+    if (!hasActiveRental) {
+      throw new Error(`Solo se permiten matrículas con alquiler activo ese día: ${vehiclePlate}`);
+    }
+    const existingBatch = parseDailyExpenseMeta(expense.note).batchId || crypto.randomUUID();
+    const note = (input.note ?? expense.note).trim();
+    expense.note = `[BATCH:${existingBatch}] empleado=${workerName}; ${note}`.trim();
+  } else {
+    expense.note = (input.note ?? expense.note).trim();
+  }
+
+  await writeRentalData(data);
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "internal_expense_update",
+    entityId: expense.id,
+    details: { contractId: expense.contractId, amount: expense.amount, category: expense.category },
+  });
+}
+
+export async function deleteInternalExpense(expenseId: string, actor: { id: string; role: RoleName }) {
+  const data = await readRentalData();
+  const expense = data.internalExpenses.find((item) => item.id === expenseId);
+  if (!expense) {
+    throw new Error("Gasto no encontrado");
+  }
+  data.internalExpenses = data.internalExpenses.filter((item) => item.id !== expenseId);
+  if (expense.contractId !== "__DIARIO__") {
+    const contract = data.contracts.find((item) => item.id === expense.contractId);
+    if (contract) {
+      contract.internalExpenseIds = contract.internalExpenseIds.filter((id) => id !== expenseId);
+    }
+  }
+  await writeRentalData(data);
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "internal_expense_delete",
+    entityId: expense.id,
+    details: { contractId: expense.contractId, amount: expense.amount, category: expense.category },
+  });
+}
+
+export async function listDailyOperationalExpenses(input: { from: string; to: string; plate: string; worker: string }) {
+  const data = await readRentalData();
+  const plateFilter = input.plate.trim().toUpperCase();
+  const workerFilter = input.worker.trim().toLowerCase();
+
+  const rows = data.internalExpenses
+    .filter((expense) => expense.contractId === "__DIARIO__")
+    .filter((expense) => isInsideRange(`${expense.expenseDate}T12:00:00`, `${input.from}T00:00:00`, `${input.to}T23:59:59`))
+    .filter((expense) => !plateFilter || expense.vehiclePlate.toUpperCase().includes(plateFilter))
+    .filter((expense) => {
+      if (!workerFilter) return true;
+      return parseDailyExpenseMeta(expense.note).workerName.toLowerCase().includes(workerFilter);
+    })
+    .map((expense) => ({
+      ...expense,
+      ...parseDailyExpenseMeta(expense.note),
+    }))
+    .toSorted((a, b) => `${b.expenseDate}-${b.createdAt}`.localeCompare(`${a.expenseDate}-${a.createdAt}`));
+
+  const totalAmount = rows.reduce((sum, row) => sum + row.amount, 0);
+  return { rows, totalAmount };
+}
+
+export async function validateDailyOperationalExpenses(input: { from: string; to: string }) {
+  const data = await readRentalData();
+  const rows = data.internalExpenses.filter(
+    (expense) =>
+      expense.contractId === "__DIARIO__" &&
+      isInsideRange(`${expense.expenseDate}T12:00:00`, `${input.from}T00:00:00`, `${input.to}T23:59:59`),
+  );
+
+  const noBatch = rows.filter((row) => !parseDailyExpenseMeta(row.note).batchId).length;
+  const noWorker = rows.filter((row) => !parseDailyExpenseMeta(row.note).workerName).length;
+  const notInFleet = rows.filter(
+    (row) => !data.fleetVehicles.some((vehicle) => vehicle.plate.toUpperCase() === row.vehiclePlate.toUpperCase()),
+  ).length;
+  const withoutActiveRental = rows.filter((row) => {
+    const dayStart = `${row.expenseDate}T00:00:00`;
+    const dayEnd = `${row.expenseDate}T23:59:59`;
+    return !data.contracts.some(
+      (contract) =>
+        contract.vehiclePlate.toUpperCase() === row.vehiclePlate.toUpperCase() &&
+        hasOverlap(contract.deliveryAt, contract.pickupAt, dayStart, dayEnd),
+    );
+  }).length;
+
+  return {
+    totalRows: rows.length,
+    noBatch,
+    noWorker,
+    notInFleet,
+    withoutActiveRental,
+    ok: noBatch === 0 && noWorker === 0 && notInFleet === 0 && withoutActiveRental === 0,
+  };
+}
+
+export type DataIntegrityIssueCode =
+  | "RESERVATION_CUSTOMER_NOT_FOUND"
+  | "RESERVATION_PLATE_NOT_IN_FLEET"
+  | "RESERVATION_CONTRACT_NOT_FOUND"
+  | "CONTRACT_RESERVATION_NOT_FOUND"
+  | "CONTRACT_INVOICE_NOT_FOUND"
+  | "CONTRACT_INTERNAL_EXPENSE_NOT_FOUND"
+  | "INVOICE_CONTRACT_NOT_FOUND"
+  | "INTERNAL_EXPENSE_CONTRACT_NOT_FOUND"
+  | "INTERNAL_EXPENSE_PLATE_NOT_IN_FLEET"
+  | "FLEET_MODEL_NOT_FOUND"
+  | "FLEET_CATEGORY_NOT_FOUND"
+  | "TARIFF_BRACKET_PLAN_NOT_FOUND"
+  | "TARIFF_PRICE_PLAN_NOT_FOUND"
+  | "TARIFF_PRICE_BRACKET_NOT_FOUND"
+  | "DUPLICATE_RESERVATION_NUMBER"
+  | "DUPLICATE_CONTRACT_NUMBER"
+  | "DUPLICATE_INVOICE_NUMBER"
+  | "DUPLICATE_FLEET_PLATE";
+
+export type DataIntegrityIssue = {
+  code: DataIntegrityIssueCode;
+  entity: string;
+  entityId: string;
+  reference: string;
+  message: string;
+};
+
+function pushDuplicateIssues(
+  values: Array<{ value: string; entity: string; entityId: string }>,
+  code: DataIntegrityIssueCode,
+  messagePrefix: string,
+  output: DataIntegrityIssue[],
+) {
+  const byValue = new Map<string, Array<{ entity: string; entityId: string }>>();
+  for (const item of values) {
+    const normalized = item.value.trim().toUpperCase();
+    if (!normalized) continue;
+    const current = byValue.get(normalized) ?? [];
+    current.push({ entity: item.entity, entityId: item.entityId });
+    byValue.set(normalized, current);
+  }
+  for (const [value, rows] of byValue.entries()) {
+    if (rows.length < 2) continue;
+    for (const row of rows) {
+      output.push({
+        code,
+        entity: row.entity,
+        entityId: row.entityId,
+        reference: value,
+        message: `${messagePrefix}: ${value}`,
+      });
+    }
+  }
+}
+
+export async function validateDataIntegrity() {
+  const data = await readRentalData();
+  const issues: DataIntegrityIssue[] = [];
+
+  const clientIds = new Set(data.clients.map((item) => item.id));
+  const reservationIds = new Set(data.reservations.map((item) => item.id));
+  const contractIds = new Set(data.contracts.map((item) => item.id));
+  const invoiceIds = new Set(data.invoices.map((item) => item.id));
+  const internalExpenseIds = new Set(data.internalExpenses.map((item) => item.id));
+  const fleetPlates = new Set(data.fleetVehicles.map((item) => item.plate.trim().toUpperCase()));
+  const modelIds = new Set(data.vehicleModels.map((item) => item.id));
+  const categoryIds = new Set(data.vehicleCategories.map((item) => item.id));
+  const tariffPlanIds = new Set(data.tariffPlans.map((item) => item.id));
+  const tariffBracketIds = new Set(data.tariffBrackets.map((item) => item.id));
+
+  for (const reservation of data.reservations) {
+    if (reservation.customerId && !clientIds.has(reservation.customerId)) {
+      issues.push({
+        code: "RESERVATION_CUSTOMER_NOT_FOUND",
+        entity: "reservation",
+        entityId: reservation.id,
+        reference: reservation.customerId,
+        message: `Cliente asociado no existe: ${reservation.customerId}`,
+      });
+    }
+    if (reservation.assignedPlate && !fleetPlates.has(reservation.assignedPlate.trim().toUpperCase())) {
+      issues.push({
+        code: "RESERVATION_PLATE_NOT_IN_FLEET",
+        entity: "reservation",
+        entityId: reservation.id,
+        reference: reservation.assignedPlate,
+        message: `Matrícula asignada fuera de flota: ${reservation.assignedPlate}`,
+      });
+    }
+    if (reservation.contractId && !contractIds.has(reservation.contractId)) {
+      issues.push({
+        code: "RESERVATION_CONTRACT_NOT_FOUND",
+        entity: "reservation",
+        entityId: reservation.id,
+        reference: reservation.contractId,
+        message: `Contrato asociado no existe: ${reservation.contractId}`,
+      });
+    }
+  }
+
+  for (const contract of data.contracts) {
+    if (!reservationIds.has(contract.reservationId)) {
+      issues.push({
+        code: "CONTRACT_RESERVATION_NOT_FOUND",
+        entity: "contract",
+        entityId: contract.id,
+        reference: contract.reservationId,
+        message: `Reserva asociada no existe: ${contract.reservationId}`,
+      });
+    }
+    if (contract.invoiceId && !invoiceIds.has(contract.invoiceId)) {
+      issues.push({
+        code: "CONTRACT_INVOICE_NOT_FOUND",
+        entity: "contract",
+        entityId: contract.id,
+        reference: contract.invoiceId,
+        message: `Factura asociada no existe: ${contract.invoiceId}`,
+      });
+    }
+    for (const expenseId of contract.internalExpenseIds) {
+      if (!internalExpenseIds.has(expenseId)) {
+        issues.push({
+          code: "CONTRACT_INTERNAL_EXPENSE_NOT_FOUND",
+          entity: "contract",
+          entityId: contract.id,
+          reference: expenseId,
+          message: `Gasto interno asociado no existe: ${expenseId}`,
+        });
+      }
+    }
+  }
+
+  for (const invoice of data.invoices) {
+    if (!contractIds.has(invoice.contractId)) {
+      issues.push({
+        code: "INVOICE_CONTRACT_NOT_FOUND",
+        entity: "invoice",
+        entityId: invoice.id,
+        reference: invoice.contractId,
+        message: `Contrato asociado no existe: ${invoice.contractId}`,
+      });
+    }
+  }
+
+  for (const expense of data.internalExpenses) {
+    if (expense.contractId !== "__DIARIO__" && !contractIds.has(expense.contractId)) {
+      issues.push({
+        code: "INTERNAL_EXPENSE_CONTRACT_NOT_FOUND",
+        entity: "internal_expense",
+        entityId: expense.id,
+        reference: expense.contractId,
+        message: `Contrato asociado de gasto no existe: ${expense.contractId}`,
+      });
+    }
+    if (expense.vehiclePlate && !fleetPlates.has(expense.vehiclePlate.trim().toUpperCase())) {
+      issues.push({
+        code: "INTERNAL_EXPENSE_PLATE_NOT_IN_FLEET",
+        entity: "internal_expense",
+        entityId: expense.id,
+        reference: expense.vehiclePlate,
+        message: `Matrícula de gasto fuera de flota: ${expense.vehiclePlate}`,
+      });
+    }
+  }
+
+  for (const vehicle of data.fleetVehicles) {
+    if (!modelIds.has(vehicle.modelId)) {
+      issues.push({
+        code: "FLEET_MODEL_NOT_FOUND",
+        entity: "fleet_vehicle",
+        entityId: vehicle.id,
+        reference: vehicle.modelId,
+        message: `Modelo no existe para matrícula ${vehicle.plate}: ${vehicle.modelId}`,
+      });
+    }
+    if (!categoryIds.has(vehicle.categoryId)) {
+      issues.push({
+        code: "FLEET_CATEGORY_NOT_FOUND",
+        entity: "fleet_vehicle",
+        entityId: vehicle.id,
+        reference: vehicle.categoryId,
+        message: `Categoría no existe para matrícula ${vehicle.plate}: ${vehicle.categoryId}`,
+      });
+    }
+  }
+
+  for (const bracket of data.tariffBrackets) {
+    if (!tariffPlanIds.has(bracket.tariffPlanId)) {
+      issues.push({
+        code: "TARIFF_BRACKET_PLAN_NOT_FOUND",
+        entity: "tariff_bracket",
+        entityId: bracket.id,
+        reference: bracket.tariffPlanId,
+        message: `Tarifa de tramo no existe: ${bracket.tariffPlanId}`,
+      });
+    }
+  }
+
+  for (const price of data.tariffPrices) {
+    if (!tariffPlanIds.has(price.tariffPlanId)) {
+      issues.push({
+        code: "TARIFF_PRICE_PLAN_NOT_FOUND",
+        entity: "tariff_price",
+        entityId: price.id,
+        reference: price.tariffPlanId,
+        message: `Tarifa de precio no existe: ${price.tariffPlanId}`,
+      });
+    }
+    if (!tariffBracketIds.has(price.bracketId)) {
+      issues.push({
+        code: "TARIFF_PRICE_BRACKET_NOT_FOUND",
+        entity: "tariff_price",
+        entityId: price.id,
+        reference: price.bracketId,
+        message: `Tramo de precio no existe: ${price.bracketId}`,
+      });
+    }
+  }
+
+  pushDuplicateIssues(
+    data.reservations.map((item) => ({ value: item.reservationNumber, entity: "reservation", entityId: item.id })),
+    "DUPLICATE_RESERVATION_NUMBER",
+    "Número de reserva duplicado",
+    issues,
+  );
+  pushDuplicateIssues(
+    data.contracts.map((item) => ({ value: item.contractNumber, entity: "contract", entityId: item.id })),
+    "DUPLICATE_CONTRACT_NUMBER",
+    "Número de contrato duplicado",
+    issues,
+  );
+  pushDuplicateIssues(
+    data.invoices.map((item) => ({ value: item.invoiceNumber, entity: "invoice", entityId: item.id })),
+    "DUPLICATE_INVOICE_NUMBER",
+    "Número de factura duplicado",
+    issues,
+  );
+  pushDuplicateIssues(
+    data.fleetVehicles.map((item) => ({ value: item.plate, entity: "fleet_vehicle", entityId: item.id })),
+    "DUPLICATE_FLEET_PLATE",
+    "Matrícula duplicada en flota",
+    issues,
+  );
+
+  const byCode = issues.reduce<Record<string, number>>((acc, issue) => {
+    acc[issue.code] = (acc[issue.code] ?? 0) + 1;
+    return acc;
+  }, {});
+
+  return {
+    checkedAt: new Date().toISOString(),
+    ok: issues.length === 0,
+    totalIssues: issues.length,
+    byCode,
+    issues,
+  };
+}
+
+export async function listActiveRentalPlatesByDate(expenseDate: string) {
+  const data = await readRentalData();
+  if (!parseDateSafe(`${expenseDate}T00:00:00`)) {
+    throw new Error("Fecha no válida");
+  }
+  const dayStart = `${expenseDate}T00:00:00`;
+  const dayEnd = `${expenseDate}T23:59:59`;
+  const contractPlates = Array.from(
+    new Set(
+      data.contracts
+        .filter((contract) => hasOverlap(contract.deliveryAt, contract.pickupAt, dayStart, dayEnd))
+        .map((contract) => contract.vehiclePlate.trim().toUpperCase())
+        .filter(Boolean),
+    ),
+  ).toSorted((a, b) => a.localeCompare(b));
+
+  const fleetByPlate = new Map(
+    data.fleetVehicles.map((vehicle) => [vehicle.plate.toUpperCase(), vehicle]),
+  );
+  const categoryById = new Map(data.vehicleCategories.map((category) => [category.id, category]));
+  const modelById = new Map(data.vehicleModels.map((model) => [model.id, model]));
+
+  return contractPlates.map((plate) => {
+    const vehicle = fleetByPlate.get(plate);
+    const category = vehicle ? categoryById.get(vehicle.categoryId) : null;
+    const model = vehicle ? modelById.get(vehicle.modelId) : null;
+    return {
+      plate,
+      groupLabel: category?.code || category?.name || "N/D",
+      modelLabel: model ? `${model.brand} ${model.model}` : "N/D",
+    };
+  });
+}
+
+export async function closeContract(contractId: string, actor: { id: string; role: RoleName }) {
+  const data = await readRentalData();
+  const contract = data.contracts.find((item) => item.id === contractId);
+
+  if (!contract) {
+    throw new Error("Contrato no encontrado");
+  }
+
+  if (!contract.cashRecord) {
+    throw new Error("No se puede cerrar contrato sin caja registrada");
+  }
+
+  if (contract.status === "CERRADO") {
+    throw new Error("Contrato ya cerrado");
+  }
+
+  // El cierre de contrato genera factura automáticamente y la vincula.
+  const ivaPercent = contract.ivaPercent || data.companySettings.defaultIvaPercent;
+  const baseAmount = contract.baseAmount;
+  const extrasAmount = contract.extrasAmount;
+  const insuranceAmount = contract.insuranceAmount;
+  const penaltiesAmount = contract.penaltiesAmount;
+  const subtotal = baseAmount + extrasAmount + insuranceAmount + penaltiesAmount;
+  const ivaAmount = (subtotal * ivaPercent) / 100;
+
+  const year = getYear(contract.deliveryAt);
+  const yearShort = getYearShort(contract.deliveryAt);
+  const key = `${year}-${contract.branchCode}`;
+  const invoiceCounter = (data.counters.invoiceByYearBranch[key] ?? 0) + 1;
+  data.counters.invoiceByYearBranch[key] = invoiceCounter;
+  const invoiceSeries = normalizeInvoiceSeries(data.companySettings.invoiceSeriesByType.F, "F");
+
+  const invoice: Invoice = {
+    id: crypto.randomUUID(),
+    invoiceNumber: buildInvoiceNumber(invoiceSeries, yearShort, contract.branchCode, invoiceCounter),
+    invoiceName: `Factura ${contract.contractNumber}`,
+    contractId: contract.id,
+    issuedAt: new Date().toISOString(),
+    baseAmount,
+    extrasAmount,
+    insuranceAmount,
+    penaltiesAmount,
+    ivaPercent,
+    ivaAmount,
+    totalAmount: subtotal + ivaAmount,
+    sentLog: [],
+  };
+
+  contract.status = "CERRADO";
+  contract.closedAt = new Date().toISOString();
+  contract.invoiceId = invoice.id;
+
+  data.invoices.push(invoice);
+  await writeRentalData(data);
+
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "contract_close",
+    entityId: contract.id,
+    details: {
+      contractNumber: contract.contractNumber,
+      invoiceNumber: invoice.invoiceNumber,
+      cashAmount: contract.cashRecord.amount,
+      totalSettlement: contract.totalSettlement,
+    },
+  });
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "invoice",
+    entityId: invoice.id,
+    details: { invoiceNumber: invoice.invoiceNumber, contractId: contract.id },
+  });
+}
+
+export async function updateContract(contractId: string, input: Record<string, string>, actor: { id: string; role: RoleName }) {
+  const data = await readRentalData();
+  const contract = data.contracts.find((item) => item.id === contractId);
+  if (!contract) {
+    throw new Error("Contrato no encontrado");
+  }
+  if (contract.status === "CERRADO") {
+    throw new Error("No se puede editar contrato cerrado");
+  }
+  contract.customerName = (input.customerName ?? contract.customerName).trim();
+  contract.companyName = (input.companyName ?? contract.companyName).trim();
+  contract.deliveryAt = (input.deliveryAt ?? contract.deliveryAt).trim();
+  contract.pickupAt = (input.pickupAt ?? contract.pickupAt).trim();
+  contract.billedCarGroup = (input.billedCarGroup ?? contract.billedCarGroup).trim();
+  contract.deductible = (input.deductible ?? contract.deductible).trim();
+  contract.privateNotes = (input.privateNotes ?? contract.privateNotes).trim();
+  contract.totalSettlement = input.totalSettlement ? parseNumber(input.totalSettlement) : contract.totalSettlement;
+  await writeRentalData(data);
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "contract_update",
+    entityId: contract.id,
+    details: { contractNumber: contract.contractNumber },
+  });
+}
+
+export async function deleteContract(contractId: string, actor: { id: string; role: RoleName }) {
+  const data = await readRentalData();
+  const contract = data.contracts.find((item) => item.id === contractId);
+  if (!contract) {
+    throw new Error("Contrato no encontrado");
+  }
+  if (contract.status === "CERRADO" || contract.invoiceId) {
+    throw new Error("No se puede borrar contrato cerrado o facturado");
+  }
+  if (data.internalExpenses.some((item) => item.contractId === contractId)) {
+    throw new Error("No se puede borrar contrato con gastos asociados");
+  }
+  const reservation = data.reservations.find((item) => item.id === contract.reservationId);
+  if (reservation) {
+    reservation.contractId = null;
+  }
+  data.contracts = data.contracts.filter((item) => item.id !== contractId);
+  await writeRentalData(data);
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "contract_delete",
+    entityId: contract.id,
+    details: { contractNumber: contract.contractNumber },
+  });
+}
+
+export async function getContractDetails(contractId: string) {
+  const data = await readRentalData();
+  const contract = data.contracts.find((item) => item.id === contractId);
+  if (!contract) {
+    return null;
+  }
+
+  const expenses = data.internalExpenses.filter((item) => item.contractId === contract.id);
+  const invoice = contract.invoiceId ? data.invoices.find((item) => item.id === contract.invoiceId) ?? null : null;
+
+  return { contract, expenses, invoice };
+}
+
+// -------------------- Listados operativos (entregas/recogidas) --------------------
+export type DeliveryPickupListRow = {
+  reservationId: string;
+  reservationNumber: string;
+  hasContract: boolean;
+  contractNumber: string;
+  customerName: string;
+  place: string;
+  branch: string;
+  datetime: string;
+  vehiclePlate: string;
+  totalPrice: number;
+  days: number;
+  privateNotes: string;
+};
+
+export async function listDeliveries(input: { from: string; to: string; branch: string }) {
+  const data = await readRentalData();
+  const branchFilter = input.branch.trim().toLowerCase();
+  const rows: DeliveryPickupListRow[] = data.reservations
+    .filter((reservation) => {
+      const inDate = isInsideRange(reservation.deliveryAt, input.from, input.to);
+      if (!inDate) {
+        return false;
+      }
+      if (!branchFilter) {
+        return true;
+      }
+      return reservation.branchDelivery.toLowerCase().includes(branchFilter);
+    })
+    .map((reservation) => {
+      const contract = reservation.contractId
+        ? data.contracts.find((item) => item.id === reservation.contractId) ?? null
+        : null;
+      return mapListRow(reservation, contract, "DELIVERY");
+    })
+    .toSorted((a, b) => a.datetime.localeCompare(b.datetime));
+
+  return {
+    withContract: rows.filter((row) => row.hasContract),
+    withoutContract: rows.filter((row) => !row.hasContract || !row.vehiclePlate),
+  };
+}
+
+export async function listPickups(input: { from: string; to: string; branch: string }) {
+  const data = await readRentalData();
+  const branchFilter = input.branch.trim().toLowerCase();
+  const rows: DeliveryPickupListRow[] = data.reservations
+    .filter((reservation) => {
+      const inDate = isInsideRange(reservation.pickupAt, input.from, input.to);
+      if (!inDate) {
+        return false;
+      }
+      if (!branchFilter) {
+        return true;
+      }
+      return reservation.branchDelivery.toLowerCase().includes(branchFilter);
+    })
+    .map((reservation) => {
+      const contract = reservation.contractId
+        ? data.contracts.find((item) => item.id === reservation.contractId) ?? null
+        : null;
+      return mapListRow(reservation, contract, "PICKUP");
+    })
+    .toSorted((a, b) => a.datetime.localeCompare(b.datetime));
+
+  return {
+    withContract: rows.filter((row) => row.hasContract),
+    withoutContract: rows.filter((row) => !row.hasContract || !row.vehiclePlate),
+  };
+}
+
+// -------------------- Planning --------------------
+type PlanningItem = {
+  id: string;
+  type: "RESERVA" | "BLOQUEO";
+  label: string;
+  vehiclePlate: string;
+  groupLabel: string;
+  modelLabel: string;
+  startAt: string;
+  endAt: string;
+  status: "PETICION" | "RESERVA_CONFIRMADA" | "CONTRATADO" | "RESERVA_HUERFANA" | "NO_DISPONIBLE" | "BLOQUEADO";
+  overlap: boolean;
+  referenceId: string;
+};
+
+export async function listPlanning(input: {
+  startDate: string;
+  periodDays: number;
+  plateFilter: string;
+  groupFilter: string;
+  modelFilter: string;
+}) {
+  const data = await readRentalData();
+  const from = parseDateSafe(`${input.startDate}T00:00:00`);
+  if (!from) {
+    throw new Error("Fecha de inicio de planning no válida");
+  }
+  const to = new Date(from);
+  to.setDate(to.getDate() + input.periodDays);
+
+  const periodStart = from.toISOString();
+  const periodEnd = to.toISOString();
+  const plateFilter = input.plateFilter.trim().toUpperCase();
+  const groupFilter = input.groupFilter.trim().toUpperCase();
+  const modelFilter = input.modelFilter.trim().toUpperCase();
+
+  const planningItems: PlanningItem[] = [];
+
+  // Construcción de items unificados de reservas y bloqueos.
+  for (const reservation of data.reservations) {
+    if (!hasOverlap(reservation.deliveryAt, reservation.pickupAt, periodStart, periodEnd)) {
+      continue;
+    }
+    const assignedPlate = reservation.assignedPlate.toUpperCase();
+    if (reservation.assignedPlate && plateFilter && !assignedPlate.includes(plateFilter)) {
+      continue;
+    }
+    const fleetVehicle = reservation.assignedPlate
+      ? data.fleetVehicles.find((item) => item.plate.toUpperCase() === assignedPlate)
+      : null;
+    const model = fleetVehicle ? data.vehicleModels.find((item) => item.id === fleetVehicle.modelId) : null;
+    const category = fleetVehicle ? data.vehicleCategories.find((item) => item.id === fleetVehicle.categoryId) : null;
+    const groupLabel = reservation.billedCarGroup || category?.code || category?.name || "N/D";
+    const modelLabel = model ? `${model.brand} ${model.model}` : reservation.assignedPlate ? "N/D" : "Reserva huérfana";
+    if (groupFilter && !groupLabel.toUpperCase().includes(groupFilter)) {
+      continue;
+    }
+    if (modelFilter && !modelLabel.toUpperCase().includes(modelFilter)) {
+      continue;
+    }
+    const hasContract = Boolean(reservation.contractId);
+    const orphanConfirmed = !reservation.assignedPlate && reservation.reservationStatus === "CONFIRMADA";
+    if (!reservation.assignedPlate && !orphanConfirmed) {
+      continue;
+    }
+    planningItems.push({
+      id: `reservation-${reservation.id}`,
+      type: "RESERVA",
+      label: reservation.reservationNumber,
+      vehiclePlate: reservation.assignedPlate ? reservation.assignedPlate.toUpperCase() : `HUERFANA-${reservation.id}`,
+      groupLabel,
+      modelLabel,
+      startAt: reservation.deliveryAt,
+      endAt: reservation.pickupAt,
+      status: orphanConfirmed
+        ? "RESERVA_HUERFANA"
+        : hasContract
+        ? "CONTRATADO"
+        : reservation.reservationStatus === "PETICION"
+          ? "PETICION"
+          : "RESERVA_CONFIRMADA",
+      overlap: false,
+      referenceId: reservation.id,
+    });
+  }
+
+  for (const block of data.vehicleBlocks) {
+    if (!hasOverlap(block.startAt, block.endAt, periodStart, periodEnd)) {
+      continue;
+    }
+    if (plateFilter && !block.vehiclePlate.toUpperCase().includes(plateFilter)) {
+      continue;
+    }
+    const fleetVehicle = data.fleetVehicles.find((item) => item.plate.toUpperCase() === block.vehiclePlate.toUpperCase());
+    const model = fleetVehicle ? data.vehicleModels.find((item) => item.id === fleetVehicle.modelId) : null;
+    const category = fleetVehicle ? data.vehicleCategories.find((item) => item.id === fleetVehicle.categoryId) : null;
+    const groupLabel = category?.code || category?.name || "N/D";
+    const modelLabel = model ? `${model.brand} ${model.model}` : "N/D";
+    if (groupFilter && !groupLabel.toUpperCase().includes(groupFilter)) {
+      continue;
+    }
+    if (modelFilter && !modelLabel.toUpperCase().includes(modelFilter)) {
+      continue;
+    }
+    planningItems.push({
+      id: `block-${block.id}`,
+      type: "BLOQUEO",
+      label: block.reason || "Bloqueo manual",
+      vehiclePlate: block.vehiclePlate.toUpperCase(),
+      groupLabel,
+      modelLabel,
+      startAt: block.startAt,
+      endAt: block.endAt,
+      status: "BLOQUEADO",
+      overlap: false,
+      referenceId: block.id,
+    });
+  }
+
+  // Marcado de solapes por matrícula para visualización en planning.
+  const byPlate: Record<string, PlanningItem[]> = {};
+  for (const item of planningItems) {
+    byPlate[item.vehiclePlate] = byPlate[item.vehiclePlate] ?? [];
+    byPlate[item.vehiclePlate].push(item);
+  }
+
+  for (const items of Object.values(byPlate)) {
+    items.sort((a, b) => a.startAt.localeCompare(b.startAt));
+    for (let i = 0; i < items.length; i += 1) {
+      for (let j = i + 1; j < items.length; j += 1) {
+        if (hasOverlap(items[i].startAt, items[i].endAt, items[j].startAt, items[j].endAt)) {
+          items[i].overlap = true;
+          items[j].overlap = true;
+        }
+      }
+    }
+  }
+
+  const grouped: Record<
+    string,
+    Record<
+      string,
+      Array<{
+        vehiclePlate: string;
+        modelLabel: string;
+        rowType: "MATRICULA" | "HUERFANA";
+        items: PlanningItem[];
+      }>
+    >
+  > = {};
+
+  for (const [vehiclePlate, items] of Object.entries(byPlate)) {
+    const first = items[0];
+    const groupLabel = first.groupLabel || "N/D";
+    const modelLabel = first.modelLabel || "N/D";
+    grouped[groupLabel] = grouped[groupLabel] ?? {};
+    grouped[groupLabel][modelLabel] = grouped[groupLabel][modelLabel] ?? [];
+    grouped[groupLabel][modelLabel].push({
+      vehiclePlate,
+      modelLabel,
+      rowType: vehiclePlate.startsWith("HUERFANA-") ? "HUERFANA" : "MATRICULA",
+      items: items.toSorted((a, b) => a.startAt.localeCompare(b.startAt)),
+    });
+  }
+
+  return Object.entries(grouped)
+    .map(([groupLabel, models]) => ({
+      groupLabel,
+      models: Object.entries(models)
+        .map(([modelLabel, rows]) => ({
+          modelLabel,
+          rows: rows.toSorted((a, b) => a.vehiclePlate.localeCompare(b.vehiclePlate)),
+        }))
+        .toSorted((a, b) => a.modelLabel.localeCompare(b.modelLabel)),
+    }))
+    .toSorted((a, b) => a.groupLabel.localeCompare(b.groupLabel));
+}
+
+// -------------------- Clientes --------------------
+export async function listClients(query: string, typeFilter: string): Promise<Client[]> {
+  const data = await readRentalData();
+  const q = query.trim().toLowerCase();
+  const type = typeFilter.trim().toUpperCase();
+  return data.clients
+    .filter((client) => {
+      const typeOk = !type || type === "TODOS" || client.clientType === type;
+      if (!typeOk) {
+        return false;
+      }
+      if (!q) {
+        return true;
+      }
+      return [
+        client.clientCode,
+        client.firstName,
+        client.lastName,
+        client.companyName,
+        client.commissionerName,
+        client.documentNumber,
+        client.licenseNumber,
+        client.email,
+      ]
+        .join(" ")
+        .toLowerCase()
+        .includes(q);
+    })
+    .toSorted((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+export async function getNextClientCode(): Promise<string> {
+  const data = await readRentalData();
+  const next = data.counters.client + 1;
+  return String(next);
+}
+
+export async function createClient(input: Record<string, string>, actor: { id: string; role: RoleName }) {
+  const data = await readRentalData();
+  const clientTypeRaw = (input.clientType ?? "PARTICULAR").toUpperCase();
+  const clientType = (["PARTICULAR", "EMPRESA", "COMISIONISTA"] as const).includes(
+    clientTypeRaw as "PARTICULAR" | "EMPRESA" | "COMISIONISTA",
+  )
+    ? (clientTypeRaw as "PARTICULAR" | "EMPRESA" | "COMISIONISTA")
+    : "PARTICULAR";
+
+  const documentNumber = (input.documentNumber ?? "").trim();
+  const licenseNumber = (input.licenseNumber ?? "").trim();
+  const duplicated = data.clients.find(
+    (client) =>
+      (documentNumber && client.documentNumber.toLowerCase() === documentNumber.toLowerCase()) ||
+      (licenseNumber && client.licenseNumber.toLowerCase() === licenseNumber.toLowerCase()),
+  );
+  const allowDuplicateLoad = input.allowDuplicateLoad === "true";
+
+  if (duplicated && !allowDuplicateLoad) {
+    throw new Error(`Duplicado detectado. Cliente existente: ${duplicated.clientCode}`);
+  }
+
+  if (duplicated && allowDuplicateLoad) {
+    return duplicated;
+  }
+
+  data.counters.client += 1;
+  const clientCode = String(data.counters.client);
+
+  const client: Client = {
+    id: crypto.randomUUID(),
+    clientCode,
+    clientType,
+    referenceCode: (input.referenceCode ?? "").trim(),
+    groupCode: (input.groupCode ?? "").trim(),
+    gender: (input.gender ?? "").trim(),
+    firstName: (input.firstName ?? "").trim(),
+    lastName: (input.lastName ?? "").trim(),
+    companyName: (input.companyName ?? "").trim(),
+    commissionerName: (input.commissionerName ?? "").trim(),
+    commissionPercent: parseNumber(input.commissionPercent ?? "0"),
+    nationality: (input.nationality ?? "").trim(),
+    language: (input.language ?? "").trim(),
+    documentType: (input.documentType ?? "").trim(),
+    documentNumber,
+    documentIssuedAt: (input.documentIssuedAt ?? "").trim(),
+    documentExpiresAt: (input.documentExpiresAt ?? "").trim(),
+    licenseNumber,
+    licenseType: (input.licenseType ?? "").trim(),
+    licenseIssuedAt: (input.licenseIssuedAt ?? "").trim(),
+    licenseExpiresAt: (input.licenseExpiresAt ?? "").trim(),
+    email: (input.email ?? "").trim(),
+    phone1: (input.phone1 ?? "").trim(),
+    phone2: (input.phone2 ?? "").trim(),
+    birthDate: (input.birthDate ?? "").trim(),
+    birthPlace: (input.birthPlace ?? "").trim(),
+    residenceAddress: "",
+    vacationAddress: "",
+    residenceStreet: (input.residenceStreet ?? "").trim(),
+    residenceCity: (input.residenceCity ?? "").trim(),
+    residencePostalCode: (input.residencePostalCode ?? "").trim(),
+    residenceRegion: (input.residenceRegion ?? "").trim(),
+    residenceCountry: (input.residenceCountry ?? "").trim(),
+    vacationStreet: (input.vacationStreet ?? "").trim(),
+    vacationCity: (input.vacationCity ?? "").trim(),
+    vacationPostalCode: (input.vacationPostalCode ?? "").trim(),
+    vacationRegion: (input.vacationRegion ?? "").trim(),
+    vacationCountry: (input.vacationCountry ?? "").trim(),
+    acquisitionChannel: (input.acquisitionChannel ?? "").trim(),
+    paymentMethod: (input.paymentMethod ?? "").trim(),
+    paymentDay: (input.paymentDay ?? "").trim(),
+    saleWindowDay: (input.saleWindowDay ?? "").trim(),
+    contactPerson: (input.contactPerson ?? "").trim(),
+    web: (input.web ?? "").trim(),
+    bankChargeIban: (input.bankChargeIban ?? "").trim(),
+    bankChargeBic: (input.bankChargeBic ?? "").trim(),
+    bankAbonoIban: (input.bankAbonoIban ?? "").trim(),
+    bankAbonoBic: (input.bankAbonoBic ?? "").trim(),
+    branchBelongingCode: (input.branchBelongingCode ?? "").trim(),
+    includeMailing: input.includeMailing === "true",
+    accountBlocked: input.accountBlocked === "true",
+    notes: (input.notes ?? "").trim(),
+    warnings: (input.warnings ?? "").trim(),
+    taxExemption: (input.taxExemption ?? "").trim(),
+    companyOwnDrivers: input.companyOwnDrivers === "true",
+    groupedBilling: input.groupedBilling === "true",
+    isAffiliate: input.isAffiliate === "true",
+    advanceMonthlyBilling: input.advanceMonthlyBilling === "true",
+    forceDeductibleCharge: input.forceDeductibleCharge === "true",
+    taxId: (input.taxId ?? "").trim(),
+    fiscalAddress: (input.fiscalAddress ?? "").trim(),
+    associatedRate: (input.associatedRate ?? "").trim(),
+    companyDriverCompanyId: (input.companyDriverCompanyId ?? "").trim(),
+    companyDrivers: (input.companyDrivers ?? "").trim(),
+    createdAt: new Date().toISOString(),
+    createdBy: actor.id,
+  };
+  client.residenceAddress = [
+    client.residenceStreet,
+    client.residenceCity,
+    client.residencePostalCode,
+    client.residenceRegion,
+    client.residenceCountry,
+  ]
+    .filter(Boolean)
+    .join(", ");
+  client.vacationAddress = [
+    client.vacationStreet,
+    client.vacationCity,
+    client.vacationPostalCode,
+    client.vacationRegion,
+    client.vacationCountry,
+  ]
+    .filter(Boolean)
+    .join(", ");
+
+  if (client.clientType === "PARTICULAR") {
+    const missing = [
+      client.firstName,
+      client.lastName,
+      client.nationality,
+      client.language,
+      client.documentType,
+      client.documentNumber,
+      client.licenseNumber,
+      client.email,
+      client.phone1,
+      client.birthDate,
+      client.birthPlace,
+      client.residenceStreet,
+      client.residenceCity,
+      client.residenceCountry,
+      client.vacationStreet,
+      client.vacationCity,
+      client.vacationCountry,
+    ].some((value) => !value);
+    if (missing) {
+      throw new Error("Faltan campos obligatorios de cliente particular");
+    }
+  } else {
+    if (!client.companyName || !client.taxId || !client.fiscalAddress || !client.email) {
+      throw new Error("Faltan campos fiscales obligatorios de empresa/comisionista");
+    }
+  }
+
+  data.clients.push(client);
+  await writeRentalData(data);
+
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "client",
+    entityId: client.id,
+    details: { clientCode: client.clientCode, clientType: client.clientType },
+  });
+
+  return client;
+}
+
+export async function getClientById(clientId: string): Promise<Client | null> {
+  const data = await readRentalData();
+  return data.clients.find((client) => client.id === clientId) ?? null;
+}
+
+export async function listClientReservations(clientId: string): Promise<Reservation[]> {
+  const data = await readRentalData();
+  return data.reservations
+    .filter((reservation) => reservation.customerId === clientId)
+    .toSorted((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+export type ClientHistorySummary = {
+  reservationsCount: number;
+  contractsCount: number;
+  openContractsCount: number;
+  closedContractsCount: number;
+  reservationsTotalAmount: number;
+  contractedTotalAmount: number;
+  invoicedTotalAmount: number;
+  lastReservationAt: string;
+};
+
+export async function getClientHistorySummary(clientId: string): Promise<ClientHistorySummary> {
+  const data = await readRentalData();
+  const reservations = data.reservations.filter((reservation) => reservation.customerId === clientId);
+  const contractsById = new Map(data.contracts.map((contract) => [contract.id, contract]));
+  const invoicesByContractId = new Map(data.invoices.map((invoice) => [invoice.contractId, invoice]));
+
+  const reservationsTotalAmount = reservations.reduce((sum, reservation) => sum + reservation.totalPrice, 0);
+  const contracts = reservations
+    .map((reservation) => (reservation.contractId ? contractsById.get(reservation.contractId) ?? null : null))
+    .filter((contract): contract is Contract => Boolean(contract));
+  const contractedTotalAmount = contracts.reduce((sum, contract) => sum + contract.totalSettlement, 0);
+  const invoicedTotalAmount = contracts.reduce((sum, contract) => {
+    const invoice = invoicesByContractId.get(contract.id);
+    return sum + (invoice?.totalAmount ?? 0);
+  }, 0);
+
+  return {
+    reservationsCount: reservations.length,
+    contractsCount: contracts.length,
+    openContractsCount: contracts.filter((contract) => contract.status === "ABIERTO").length,
+    closedContractsCount: contracts.filter((contract) => contract.status === "CERRADO").length,
+    reservationsTotalAmount,
+    contractedTotalAmount,
+    invoicedTotalAmount,
+    lastReservationAt: reservations[0]?.createdAt ?? "",
+  };
+}
+
+export type ClientCommissionSummaryRow = {
+  clientId: string | null;
+  subjectType: "CLIENTE" | "COMISIONISTA";
+  subjectName: string;
+  commissionPercent: number;
+  reservationsCount: number;
+  contractedCount: number;
+  reservationsAmount: number;
+  contractedAmount: number;
+  commissionReservationsAmount: number;
+  commissionContractedAmount: number;
+};
+
+export async function listClientCommissionSummary(): Promise<ClientCommissionSummaryRow[]> {
+  const data = await readRentalData();
+  const clientsById = new Map(data.clients.map((client) => [client.id, client]));
+  const grouped = new Map<string, ClientCommissionSummaryRow>();
+  const commissionerByName = new Map(
+    data.clients
+      .filter((client) => client.clientType === "COMISIONISTA")
+      .map((client) => [
+        (client.commissionerName || client.companyName || client.clientCode).trim().toLowerCase(),
+        client,
+      ]),
+  );
+
+  function upsertRow(input: {
+    key: string;
+    clientId: string | null;
+    subjectType: "CLIENTE" | "COMISIONISTA";
+    subjectName: string;
+    commissionPercent: number;
+    reservationAmount: number;
+    contractedAmount: number;
+    contracted: boolean;
+  }) {
+    const current = grouped.get(input.key) ?? {
+      clientId: input.clientId,
+      subjectType: input.subjectType,
+      subjectName: input.subjectName,
+      commissionPercent: input.commissionPercent,
+      reservationsCount: 0,
+      contractedCount: 0,
+      reservationsAmount: 0,
+      contractedAmount: 0,
+      commissionReservationsAmount: 0,
+      commissionContractedAmount: 0,
+    };
+    current.reservationsCount += 1;
+    current.reservationsAmount += input.reservationAmount;
+    current.commissionReservationsAmount += (input.reservationAmount * input.commissionPercent) / 100;
+    if (input.contracted) {
+      current.contractedCount += 1;
+      current.contractedAmount += input.contractedAmount;
+      current.commissionContractedAmount += (input.contractedAmount * input.commissionPercent) / 100;
+    }
+    grouped.set(input.key, current);
+  }
+
+  for (const reservation of data.reservations) {
+    const customerClient = reservation.customerId ? clientsById.get(reservation.customerId) ?? null : null;
+    const contract = reservation.contractId ? data.contracts.find((item) => item.id === reservation.contractId) ?? null : null;
+    const contractedAmount = contract?.totalSettlement ?? reservation.totalPrice;
+    const reservationAmount = reservation.totalPrice;
+
+    const commissionerName = reservation.customerCommissioner.trim();
+    const normalizedCommissionerName = commissionerName.toLowerCase();
+    const commissionerClient = normalizedCommissionerName ? commissionerByName.get(normalizedCommissionerName) ?? null : null;
+    if (commissionerName) {
+      const resolvedName =
+        commissionerClient?.commissionerName || commissionerClient?.companyName || commissionerClient?.clientCode || commissionerName;
+      const percent = commissionerClient?.commissionPercent ?? 0;
+      upsertRow({
+        key: `COMISIONISTA|${commissionerClient?.id ?? normalizedCommissionerName}`,
+        clientId: commissionerClient?.id ?? null,
+        subjectType: "COMISIONISTA",
+        subjectName: resolvedName,
+        commissionPercent: percent,
+        reservationAmount,
+        contractedAmount,
+        contracted: Boolean(reservation.contractId),
+      });
+      continue;
+    }
+
+    if (customerClient) {
+      const name = [customerClient.firstName, customerClient.lastName].join(" ").trim() || customerClient.companyName || customerClient.clientCode;
+      const percent = customerClient.commissionPercent ?? 0;
+      upsertRow({
+        key: `CLIENTE|${customerClient.id}`,
+        clientId: customerClient.id,
+        subjectType: "CLIENTE",
+        subjectName: name,
+        commissionPercent: percent,
+        reservationAmount,
+        contractedAmount,
+        contracted: Boolean(reservation.contractId),
+      });
+    }
+  }
+
+  return Array.from(grouped.values())
+    .filter((row) => row.reservationsCount > 0)
+    .toSorted((a, b) => b.commissionContractedAmount - a.commissionContractedAmount || b.reservationsAmount - a.reservationsAmount);
+}
+
+export async function deactivateClient(clientId: string, actor: { id: string; role: RoleName }) {
+  const data = await readRentalData();
+  const client = data.clients.find((item) => item.id === clientId);
+  if (!client) {
+    throw new Error("Cliente no encontrado");
+  }
+  const hasAnyContractHistory = data.reservations.some(
+    (reservation) => reservation.customerId === clientId && Boolean(reservation.contractId),
+  );
+  if (hasAnyContractHistory) {
+    throw new Error("No se puede dar de baja un cliente con contratos históricos");
+  }
+  client.accountBlocked = true;
+  await writeRentalData(data);
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "client_deactivate",
+    entityId: client.id,
+    details: { clientCode: client.clientCode },
+  });
+}
+
+export async function updateClient(clientId: string, input: Record<string, string>, actor: { id: string; role: RoleName }) {
+  const data = await readRentalData();
+  const client = data.clients.find((item) => item.id === clientId);
+  if (!client) {
+    throw new Error("Cliente no encontrado");
+  }
+
+  client.firstName = (input.firstName ?? client.firstName).trim();
+  client.lastName = (input.lastName ?? client.lastName).trim();
+  client.companyName = (input.companyName ?? client.companyName).trim();
+  client.documentType = (input.documentType ?? client.documentType).trim();
+  client.documentNumber = (input.documentNumber ?? client.documentNumber).trim();
+  client.licenseNumber = (input.licenseNumber ?? client.licenseNumber).trim();
+  client.email = (input.email ?? client.email).trim();
+  client.phone1 = (input.phone1 ?? client.phone1).trim();
+  client.phone2 = (input.phone2 ?? client.phone2).trim();
+  client.language = (input.language ?? client.language).trim();
+  client.paymentMethod = (input.paymentMethod ?? client.paymentMethod).trim();
+  if (input.commissionPercent !== undefined) {
+    client.commissionPercent = parseNumber(input.commissionPercent);
+  }
+  client.notes = (input.notes ?? client.notes).trim();
+  client.warnings = (input.warnings ?? client.warnings).trim();
+
+  if (client.clientType === "PARTICULAR") {
+    client.birthDate = (input.birthDate ?? client.birthDate).trim();
+    client.birthPlace = (input.birthPlace ?? client.birthPlace).trim();
+    client.documentIssuedAt = (input.documentIssuedAt ?? client.documentIssuedAt).trim();
+    client.documentExpiresAt = (input.documentExpiresAt ?? client.documentExpiresAt).trim();
+    client.licenseIssuedAt = (input.licenseIssuedAt ?? client.licenseIssuedAt).trim();
+    client.licenseExpiresAt = (input.licenseExpiresAt ?? client.licenseExpiresAt).trim();
+    client.residenceStreet = (input.residenceStreet ?? client.residenceStreet).trim();
+    client.residenceCity = (input.residenceCity ?? client.residenceCity).trim();
+    client.residencePostalCode = (input.residencePostalCode ?? client.residencePostalCode).trim();
+    client.residenceRegion = (input.residenceRegion ?? client.residenceRegion).trim();
+    client.residenceCountry = (input.residenceCountry ?? client.residenceCountry).trim();
+    client.vacationStreet = (input.vacationStreet ?? client.vacationStreet).trim();
+    client.vacationCity = (input.vacationCity ?? client.vacationCity).trim();
+    client.vacationPostalCode = (input.vacationPostalCode ?? client.vacationPostalCode).trim();
+    client.vacationRegion = (input.vacationRegion ?? client.vacationRegion).trim();
+    client.vacationCountry = (input.vacationCountry ?? client.vacationCountry).trim();
+  } else {
+    client.taxId = (input.taxId ?? client.taxId).trim();
+    client.fiscalAddress = (input.fiscalAddress ?? client.fiscalAddress).trim();
+  }
+
+  await writeRentalData(data);
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "client_update",
+    entityId: client.id,
+    details: { clientCode: client.clientCode },
+  });
+}
+
+export async function deleteClient(clientId: string, actor: { id: string; role: RoleName }) {
+  const data = await readRentalData();
+  const client = data.clients.find((item) => item.id === clientId);
+  if (!client) {
+    throw new Error("Cliente no encontrado");
+  }
+  if (data.reservations.some((reservation) => reservation.customerId === clientId)) {
+    throw new Error("No se puede borrar cliente con reservas asociadas");
+  }
+  data.clients = data.clients.filter((item) => item.id !== clientId);
+  await writeRentalData(data);
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "client_delete",
+    entityId: client.id,
+    details: { clientCode: client.clientCode },
+  });
+}
+
+// -------------------- Catálogo y flota --------------------
+export async function listVehicleModels(): Promise<VehicleModel[]> {
+  const data = await readRentalData();
+  return data.vehicleModels.toSorted((a, b) => a.brand.localeCompare(b.brand));
+}
+
+export async function createVehicleModel(input: Record<string, string>, actor: { id: string; role: RoleName }) {
+  const data = await readRentalData();
+  const model: VehicleModel = {
+    id: crypto.randomUUID(),
+    brand: (input.brand ?? "").trim(),
+    model: (input.model ?? "").trim(),
+    transmission: input.transmission === "AUTOMATICO" ? "AUTOMATICO" : "MANUAL",
+    features: (input.features ?? "").trim(),
+    fuelType: (input.fuelType ?? "").trim(),
+    categoryId: (input.categoryId ?? "").trim(),
+    createdAt: new Date().toISOString(),
+    createdBy: actor.id,
+  };
+
+  if (!model.brand || !model.model) {
+    throw new Error("Marca y modelo son obligatorios");
+  }
+
+  data.vehicleModels.push(model);
+  await writeRentalData(data);
+}
+
+export async function updateVehicleModel(modelId: string, input: Record<string, string>, actor: { id: string; role: RoleName }) {
+  const data = await readRentalData();
+  const model = data.vehicleModels.find((item) => item.id === modelId);
+  if (!model) {
+    throw new Error("Modelo no encontrado");
+  }
+  model.brand = (input.brand ?? model.brand).trim();
+  model.model = (input.model ?? model.model).trim();
+  model.transmission = input.transmission === "AUTOMATICO" ? "AUTOMATICO" : "MANUAL";
+  model.features = (input.features ?? model.features).trim();
+  model.fuelType = (input.fuelType ?? model.fuelType).trim();
+  model.categoryId = (input.categoryId ?? model.categoryId).trim();
+  await writeRentalData(data);
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "vehicle_model_update",
+    entityId: model.id,
+    details: { brand: model.brand, model: model.model },
+  });
+}
+
+export async function deleteVehicleModel(modelId: string, actor: { id: string; role: RoleName }) {
+  const data = await readRentalData();
+  const model = data.vehicleModels.find((item) => item.id === modelId);
+  if (!model) {
+    throw new Error("Modelo no encontrado");
+  }
+  if (data.fleetVehicles.some((item) => item.modelId === modelId)) {
+    throw new Error("No se puede borrar modelo con matrículas asociadas");
+  }
+  data.vehicleModels = data.vehicleModels.filter((item) => item.id !== modelId);
+  await writeRentalData(data);
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "vehicle_model_delete",
+    entityId: model.id,
+    details: { brand: model.brand, model: model.model },
+  });
+}
+
+export async function listVehicleCategories(): Promise<VehicleCategory[]> {
+  const data = await readRentalData();
+  return data.vehicleCategories.toSorted((a, b) => a.code.localeCompare(b.code));
+}
+
+export async function createVehicleCategory(input: Record<string, string>, actor: { id: string; role: RoleName }) {
+  const data = await readRentalData();
+  const name = (input.name ?? "").trim();
+  const code = (input.code ?? "").trim().toUpperCase().replace(/\s+/g, "-") || name.toUpperCase().replace(/\s+/g, "-");
+  const category: VehicleCategory = {
+    id: crypto.randomUUID(),
+    code,
+    name,
+    summary: (input.summary ?? "").trim(),
+    transmissionRequired: input.transmissionRequired === "AUTOMATICO" ? "AUTOMATICO" : "MANUAL",
+    minSeats: parseNumber(input.minSeats ?? "0"),
+    minDoors: parseNumber(input.minDoors ?? "0"),
+    minLuggage: parseNumber(input.minLuggage ?? "0"),
+    fuelType: (input.fuelType ?? "").trim(),
+    airConditioning: input.airConditioning === "true",
+    insurancePrice: parseNumber(input.insurancePrice ?? "0"),
+    deductiblePrice: parseNumber(input.deductiblePrice ?? "0"),
+    depositPrice: parseNumber(input.depositPrice ?? "0"),
+    createdAt: new Date().toISOString(),
+    createdBy: actor.id,
+  };
+
+  if (!category.name) {
+    throw new Error("Nombre de categoría obligatorio");
+  }
+  const duplicated = data.vehicleCategories.find((item) => item.code === category.code);
+  if (duplicated) {
+    throw new Error("Ya existe una categoría con ese código/nombre");
+  }
+  data.vehicleCategories.push(category);
+  await writeRentalData(data);
+}
+
+export async function updateVehicleCategory(
+  categoryId: string,
+  input: Record<string, string>,
+  actor: { id: string; role: RoleName },
+) {
+  const data = await readRentalData();
+  const category = data.vehicleCategories.find((item) => item.id === categoryId);
+  if (!category) {
+    throw new Error("Categoría no encontrada");
+  }
+  category.name = (input.name ?? category.name).trim();
+  category.code = (input.code ?? category.code).trim().toUpperCase();
+  category.summary = (input.summary ?? category.summary).trim();
+  category.transmissionRequired = input.transmissionRequired === "AUTOMATICO" ? "AUTOMATICO" : "MANUAL";
+  category.minSeats = parseNumber(input.minSeats ?? String(category.minSeats));
+  category.minDoors = parseNumber(input.minDoors ?? String(category.minDoors));
+  category.minLuggage = parseNumber(input.minLuggage ?? String(category.minLuggage));
+  category.fuelType = (input.fuelType ?? category.fuelType).trim();
+  category.airConditioning = input.airConditioning === "true";
+  category.insurancePrice = parseNumber(input.insurancePrice ?? String(category.insurancePrice));
+  category.deductiblePrice = parseNumber(input.deductiblePrice ?? String(category.deductiblePrice));
+  category.depositPrice = parseNumber(input.depositPrice ?? String(category.depositPrice));
+  await writeRentalData(data);
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "vehicle_category_update",
+    entityId: category.id,
+    details: { code: category.code, name: category.name },
+  });
+}
+
+export async function deleteVehicleCategory(categoryId: string, actor: { id: string; role: RoleName }) {
+  const data = await readRentalData();
+  const category = data.vehicleCategories.find((item) => item.id === categoryId);
+  if (!category) {
+    throw new Error("Categoría no encontrada");
+  }
+  if (data.fleetVehicles.some((item) => item.categoryId === categoryId)) {
+    throw new Error("No se puede borrar categoría con matrículas asociadas");
+  }
+  data.vehicleCategories = data.vehicleCategories.filter((item) => item.id !== categoryId);
+  await writeRentalData(data);
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "vehicle_category_delete",
+    entityId: category.id,
+    details: { code: category.code, name: category.name },
+  });
+}
+
+export async function listFleetVehicles(): Promise<
+  Array<FleetVehicle & { modelLabel: string; categoryLabel: string; activeContracts: number; status: "ALTA" | "BAJA" }>
+> {
+  const data = await readRentalData();
+  return data.fleetVehicles
+    .map((vehicle) => {
+      const model = data.vehicleModels.find((item) => item.id === vehicle.modelId);
+      const category = data.vehicleCategories.find((item) => item.id === vehicle.categoryId);
+      const activeContracts = data.contracts.filter(
+        (contract) => contract.vehiclePlate.toUpperCase() === vehicle.plate.toUpperCase() && contract.status === "ABIERTO",
+      ).length;
+      return {
+        ...vehicle,
+        modelLabel: model ? `${model.brand} ${model.model}` : "N/D",
+        categoryLabel: category ? `${category.code} - ${category.name}` : "N/D",
+        activeContracts,
+        status: vehicle.deactivatedAt ? ("BAJA" as const) : ("ALTA" as const),
+      };
+    })
+    .toSorted((a, b) => a.plate.localeCompare(b.plate));
+}
+
+export async function listVehicleExtras(): Promise<VehicleExtra[]> {
+  const data = await readRentalData();
+  return data.vehicleExtras.toSorted((a, b) => a.code.localeCompare(b.code));
+}
+
+export async function createVehicleExtra(input: Record<string, string>, actor: { id: string; role: RoleName }) {
+  const data = await readRentalData();
+  const code = (input.code ?? "").trim().toUpperCase();
+  const name = (input.name ?? "").trim();
+  if (!code || !name) throw new Error("Código y nombre del extra son obligatorios");
+  if (data.vehicleExtras.some((item) => item.code === code)) throw new Error("Ya existe un extra con ese código");
+  const extra: VehicleExtra = {
+    id: crypto.randomUUID(),
+    code,
+    name,
+    priceMode: input.priceMode === "POR_DIA" ? "POR_DIA" : "FIJO",
+    unitPrice: parseNumber(input.unitPrice ?? "0"),
+    maxDays: parseNumber(input.maxDays ?? "0"),
+    active: input.active === "false" ? false : true,
+    createdAt: new Date().toISOString(),
+    createdBy: actor.id,
+  };
+  data.vehicleExtras.push(extra);
+  await writeRentalData(data);
+}
+
+export async function updateVehicleExtra(extraId: string, input: Record<string, string>, actor: { id: string; role: RoleName }) {
+  const data = await readRentalData();
+  const extra = data.vehicleExtras.find((item) => item.id === extraId);
+  if (!extra) throw new Error("Extra no encontrado");
+  extra.code = (input.code ?? extra.code).trim().toUpperCase();
+  extra.name = (input.name ?? extra.name).trim();
+  extra.priceMode = input.priceMode === "POR_DIA" ? "POR_DIA" : "FIJO";
+  extra.unitPrice = parseNumber(input.unitPrice ?? String(extra.unitPrice));
+  extra.maxDays = parseNumber(input.maxDays ?? String(extra.maxDays));
+  extra.active = input.active === "false" ? false : true;
+  await writeRentalData(data);
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "vehicle_extra_update",
+    entityId: extra.id,
+    details: { code: extra.code, name: extra.name },
+  });
+}
+
+export async function deleteVehicleExtra(extraId: string, actor: { id: string; role: RoleName }) {
+  const data = await readRentalData();
+  const extra = data.vehicleExtras.find((item) => item.id === extraId);
+  if (!extra) throw new Error("Extra no encontrado");
+  data.vehicleExtras = data.vehicleExtras.filter((item) => item.id !== extraId);
+  await writeRentalData(data);
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "vehicle_extra_delete",
+    entityId: extra.id,
+    details: { code: extra.code, name: extra.name },
+  });
+}
+
+export async function createFleetVehicle(input: Record<string, string>, actor: { id: string; role: RoleName }) {
+  const data = await readRentalData();
+  const plate = (input.plate ?? "").trim().toUpperCase();
+  if (!plate || !input.modelId || !input.activeFrom) {
+    throw new Error("Faltan campos obligatorios de flota");
+  }
+  if (data.vehicleCategories.length === 0) {
+    throw new Error("Debes crear primero al menos una categoría");
+  }
+
+  const exists = data.fleetVehicles.find((item) => item.plate === plate);
+  if (exists) {
+    throw new Error("La matrícula ya existe en flota");
+  }
+
+  const modelId = (input.modelId ?? "").trim();
+  const model = data.vehicleModels.find((item) => item.id === modelId);
+  if (!model) {
+    throw new Error("Modelo no encontrado");
+  }
+  const categoryId = (input.categoryId ?? "").trim() || model.categoryId;
+  if (!categoryId) {
+    throw new Error("El modelo no tiene grupo asignado");
+  }
+
+  const vehicle: FleetVehicle = {
+    id: crypto.randomUUID(),
+    plate,
+    modelId,
+    categoryId,
+    owner: normalizeOwnerName(input.owner ?? ""),
+    color: (input.color ?? "").trim(),
+    year: parseNumber(input.year ?? "0"),
+    vin: (input.vin ?? "").trim(),
+    odometerKm: parseNumber(input.odometerKm ?? "0"),
+    fuelType: (input.fuelType ?? "").trim() || model.fuelType || "",
+    activeFrom: (input.activeFrom ?? "").trim(),
+    activeUntil: (input.activeUntil ?? "").trim(),
+    acquisitionCost: parseNumber(input.acquisitionCost ?? "0"),
+    alertNotes: (input.alertNotes ?? "").trim(),
+    deactivatedAt: "",
+    deactivationReason: "",
+    deactivationAmount: 0,
+    createdAt: new Date().toISOString(),
+    createdBy: actor.id,
+  };
+  data.fleetVehicles.push(vehicle);
+  await writeRentalData(data);
+}
+
+export async function updateFleetVehicle(vehicleId: string, input: Record<string, string>, actor: { id: string; role: RoleName }) {
+  const data = await readRentalData();
+  const vehicle = data.fleetVehicles.find((item) => item.id === vehicleId);
+  if (!vehicle) {
+    throw new Error("Vehículo no encontrado");
+  }
+  vehicle.categoryId = (input.categoryId ?? vehicle.categoryId).trim();
+  vehicle.owner = normalizeOwnerName(input.owner ?? vehicle.owner);
+  vehicle.color = (input.color ?? vehicle.color).trim();
+  vehicle.year = parseNumber(input.year ?? String(vehicle.year));
+  vehicle.vin = (input.vin ?? vehicle.vin).trim();
+  vehicle.odometerKm = parseNumber(input.odometerKm ?? String(vehicle.odometerKm));
+  vehicle.fuelType = (input.fuelType ?? vehicle.fuelType).trim();
+  vehicle.activeFrom = (input.activeFrom ?? vehicle.activeFrom).trim();
+  vehicle.activeUntil = (input.activeUntil ?? vehicle.activeUntil).trim();
+  vehicle.acquisitionCost = parseNumber(input.acquisitionCost ?? String(vehicle.acquisitionCost));
+  vehicle.alertNotes = (input.alertNotes ?? vehicle.alertNotes).trim();
+  if ((input.deactivatedAt ?? "").trim()) {
+    vehicle.deactivatedAt = (input.deactivatedAt ?? "").trim();
+    vehicle.deactivationReason = (input.deactivationReason ?? vehicle.deactivationReason).trim();
+    vehicle.deactivationAmount = parseNumber(input.deactivationAmount ?? String(vehicle.deactivationAmount));
+  }
+  await writeRentalData(data);
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "fleet_vehicle_update",
+    entityId: vehicle.id,
+    details: { plate: vehicle.plate },
+  });
+}
+
+export async function registerFleetVehicleDrop(input: Record<string, string>, actor: { id: string; role: RoleName }) {
+  const data = await readRentalData();
+  const plate = (input.plate ?? "").trim().toUpperCase();
+  const vehicle = data.fleetVehicles.find((item) => item.plate.toUpperCase() === plate);
+  if (!vehicle) {
+    throw new Error("Matrícula no encontrada");
+  }
+  const deactivatedAt = (input.deactivatedAt ?? "").trim();
+  if (!deactivatedAt) {
+    throw new Error("Fecha de baja obligatoria");
+  }
+  vehicle.deactivatedAt = deactivatedAt;
+  vehicle.deactivationReason = (input.deactivationReason ?? "").trim();
+  vehicle.deactivationAmount = parseNumber(input.deactivationAmount ?? "0");
+  await writeRentalData(data);
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "fleet_vehicle_drop",
+    entityId: vehicle.id,
+    details: {
+      plate: vehicle.plate,
+      deactivatedAt: vehicle.deactivatedAt,
+      reason: vehicle.deactivationReason,
+      amount: vehicle.deactivationAmount,
+    },
+  });
+}
+
+export async function deleteFleetVehicle(vehicleId: string, actor: { id: string; role: RoleName }) {
+  const data = await readRentalData();
+  const vehicle = data.fleetVehicles.find((item) => item.id === vehicleId);
+  if (!vehicle) {
+    throw new Error("Vehículo no encontrado");
+  }
+  const plate = vehicle.plate.toUpperCase();
+  const hasLinks =
+    data.reservations.some((item) => item.assignedPlate.toUpperCase() === plate) ||
+    data.contracts.some((item) => item.vehiclePlate.toUpperCase() === plate) ||
+    data.internalExpenses.some((item) => item.vehiclePlate.toUpperCase() === plate) ||
+    data.vehicleTasks.some((item) => item.plate.toUpperCase() === plate) ||
+    data.vehicleBlocks.some((item) => item.vehiclePlate.toUpperCase() === plate);
+  if (hasLinks) {
+    throw new Error("No se puede borrar matrícula con histórico asociado");
+  }
+  data.fleetVehicles = data.fleetVehicles.filter((item) => item.id !== vehicleId);
+  await writeRentalData(data);
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "fleet_vehicle_delete",
+    entityId: vehicle.id,
+    details: { plate: vehicle.plate },
+  });
+}
+
+export async function getVehicleRentalHistory(plateQuery: string): Promise<Reservation[]> {
+  const data = await readRentalData();
+  const plate = plateQuery.trim().toUpperCase();
+  if (!plate) {
+    return [];
+  }
+  return data.reservations
+    .filter((reservation) => reservation.assignedPlate.toUpperCase() === plate)
+    .toSorted((a, b) => b.deliveryAt.localeCompare(a.deliveryAt));
+}
+
+export async function getVehicleProductionSummary(input: { from: string; to: string }) {
+  const data = await readRentalData();
+  const vehicles = data.fleetVehicles;
+
+  const summary = vehicles.map((vehicle) => {
+    const contracts = data.contracts.filter(
+      (contract) =>
+        contract.vehiclePlate.toUpperCase() === vehicle.plate.toUpperCase() &&
+        isInsideRange(contract.deliveryAt, input.from, input.to),
+    );
+    const income = contracts.reduce((sum, contract) => sum + contract.totalSettlement, 0);
+    const expenses = data.internalExpenses
+      .filter(
+        (expense) =>
+          expense.vehiclePlate.toUpperCase() === vehicle.plate.toUpperCase() &&
+          isInsideRange(`${expense.expenseDate}T12:00:00`, input.from, input.to),
+      )
+      .reduce((sum, expense) => sum + expense.amount, 0);
+    const costBase = vehicle.acquisitionCost || 0;
+    return {
+      plate: vehicle.plate,
+      income,
+      expenses,
+      costBase,
+      profitability: income - expenses - costBase,
+    };
+  });
+
+  return summary.toSorted((a, b) => a.plate.localeCompare(b.plate));
+}
+
+export async function listVehicleTasks(input: { status?: string; plate?: string }) {
+  const data = await readRentalData();
+  const statusFilter = (input.status ?? "").trim().toUpperCase();
+  const plateFilter = (input.plate ?? "").trim().toUpperCase();
+  return data.vehicleTasks
+    .filter((task) => {
+      if (statusFilter && statusFilter !== "TODOS" && task.status !== statusFilter) {
+        return false;
+      }
+      if (plateFilter && !task.plate.toUpperCase().includes(plateFilter)) {
+        return false;
+      }
+      return true;
+    })
+    .toSorted((a, b) => a.dueDate.localeCompare(b.dueDate));
+}
+
+export async function createVehicleTask(input: Record<string, string>, actor: { id: string; role: RoleName }) {
+  const data = await readRentalData();
+  const plate = (input.plate ?? "").trim().toUpperCase();
+  if (!plate) {
+    throw new Error("Matrícula obligatoria");
+  }
+  const existsVehicle = data.fleetVehicles.find((item) => item.plate.toUpperCase() === plate);
+  if (!existsVehicle) {
+    throw new Error("La matrícula no existe en flota");
+  }
+  const taskTypeRaw = (input.taskType ?? "MANTENIMIENTO").trim().toUpperCase();
+  const taskType = (["LIMPIEZA", "MANTENIMIENTO", "ITV", "REVISION"] as const).includes(
+    taskTypeRaw as "LIMPIEZA" | "MANTENIMIENTO" | "ITV" | "REVISION",
+  )
+    ? (taskTypeRaw as "LIMPIEZA" | "MANTENIMIENTO" | "ITV" | "REVISION")
+    : "MANTENIMIENTO";
+  const dueDate = (input.dueDate ?? "").trim();
+  if (!parseDateSafe(`${dueDate}T00:00:00`)) {
+    throw new Error("Fecha objetivo no válida");
+  }
+  const task: VehicleTask = {
+    id: crypto.randomUUID(),
+    plate,
+    taskType,
+    title: (input.title ?? "").trim() || taskType,
+    dueDate,
+    status: "PENDIENTE",
+    notes: (input.notes ?? "").trim(),
+    createdAt: new Date().toISOString(),
+    createdBy: actor.id,
+    updatedAt: new Date().toISOString(),
+    updatedBy: actor.id,
+  };
+  data.vehicleTasks.push(task);
+  await writeRentalData(data);
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "vehicle_task_create",
+    entityId: task.id,
+    details: { plate: task.plate, taskType: task.taskType, dueDate: task.dueDate },
+  });
+}
+
+export async function updateVehicleTaskStatus(
+  taskId: string,
+  input: Record<string, string>,
+  actor: { id: string; role: RoleName },
+) {
+  const data = await readRentalData();
+  const task = data.vehicleTasks.find((item) => item.id === taskId);
+  if (!task) {
+    throw new Error("Tarea no encontrada");
+  }
+  const statusRaw = (input.status ?? "").trim().toUpperCase();
+  const nextStatus = (["PENDIENTE", "EN_CURSO", "COMPLETADA", "CANCELADA"] as const).includes(
+    statusRaw as "PENDIENTE" | "EN_CURSO" | "COMPLETADA" | "CANCELADA",
+  )
+    ? (statusRaw as "PENDIENTE" | "EN_CURSO" | "COMPLETADA" | "CANCELADA")
+    : task.status;
+  task.status = nextStatus;
+  if ((input.notes ?? "").trim()) {
+    task.notes = (input.notes ?? "").trim();
+  }
+  task.updatedAt = new Date().toISOString();
+  task.updatedBy = actor.id;
+  await writeRentalData(data);
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "vehicle_task_status",
+    entityId: task.id,
+    details: { plate: task.plate, status: task.status },
+  });
+}
+
+export async function updateVehicleTask(taskId: string, input: Record<string, string>, actor: { id: string; role: RoleName }) {
+  const data = await readRentalData();
+  const task = data.vehicleTasks.find((item) => item.id === taskId);
+  if (!task) {
+    throw new Error("Tarea no encontrada");
+  }
+  const plate = (input.plate ?? task.plate).trim().toUpperCase();
+  if (!data.fleetVehicles.some((item) => item.plate.toUpperCase() === plate)) {
+    throw new Error("La matrícula no existe en flota");
+  }
+  const taskTypeRaw = (input.taskType ?? task.taskType).trim().toUpperCase();
+  const taskType = (["LIMPIEZA", "MANTENIMIENTO", "ITV", "REVISION"] as const).includes(
+    taskTypeRaw as "LIMPIEZA" | "MANTENIMIENTO" | "ITV" | "REVISION",
+  )
+    ? (taskTypeRaw as "LIMPIEZA" | "MANTENIMIENTO" | "ITV" | "REVISION")
+    : task.taskType;
+  const dueDate = (input.dueDate ?? task.dueDate).trim();
+  if (!parseDateSafe(`${dueDate}T00:00:00`)) {
+    throw new Error("Fecha objetivo no válida");
+  }
+  task.plate = plate;
+  task.taskType = taskType;
+  task.title = (input.title ?? task.title).trim() || taskType;
+  task.dueDate = dueDate;
+  if ((input.status ?? "").trim()) {
+    const statusRaw = (input.status ?? "").trim().toUpperCase();
+    if ((["PENDIENTE", "EN_CURSO", "COMPLETADA", "CANCELADA"] as const).includes(
+      statusRaw as "PENDIENTE" | "EN_CURSO" | "COMPLETADA" | "CANCELADA",
+    )) {
+      task.status = statusRaw as "PENDIENTE" | "EN_CURSO" | "COMPLETADA" | "CANCELADA";
+    }
+  }
+  if ((input.notes ?? "").trim()) {
+    task.notes = (input.notes ?? "").trim();
+  }
+  task.updatedAt = new Date().toISOString();
+  task.updatedBy = actor.id;
+  await writeRentalData(data);
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "vehicle_task_update",
+    entityId: task.id,
+    details: { plate: task.plate, taskType: task.taskType, status: task.status, dueDate: task.dueDate },
+  });
+}
+
+export async function deleteVehicleTask(taskId: string, actor: { id: string; role: RoleName }) {
+  const data = await readRentalData();
+  const task = data.vehicleTasks.find((item) => item.id === taskId);
+  if (!task) {
+    throw new Error("Tarea no encontrada");
+  }
+  data.vehicleTasks = data.vehicleTasks.filter((item) => item.id !== taskId);
+  await writeRentalData(data);
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "vehicle_task_delete",
+    entityId: task.id,
+    details: { plate: task.plate, taskType: task.taskType },
+  });
+}
+
+export async function listVehicleTaskAlerts(input: { daysAhead: number }) {
+  const tasks = await listVehicleTasks({ status: "PENDIENTE" });
+  const now = new Date();
+  const to = new Date();
+  to.setDate(to.getDate() + input.daysAhead);
+  return tasks.filter((task) => {
+    const due = parseDateSafe(`${task.dueDate}T23:59:59`);
+    if (!due) {
+      return false;
+    }
+    return due >= now && due <= to;
+  });
+}
+
+// -------------------- Tarifas configurables por empresa --------------------
+export async function listTariffPlans(query: string) {
+  const data = await readRentalData();
+  const q = query.trim().toLowerCase();
+  return data.tariffPlans
+    .filter((plan) => {
+      if (!q) {
+        return true;
+      }
+      return [plan.code, plan.title, plan.season].join(" ").toLowerCase().includes(q);
+    })
+    .toSorted((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+export async function createTariffPlan(input: Record<string, string>, actor: { id: string; role: RoleName }) {
+  const data = await readRentalData();
+  const code = (input.code ?? "").trim().toUpperCase();
+  const title = (input.title ?? "").trim();
+  if (!code || !title) {
+    throw new Error("Código y título de tarifa son obligatorios");
+  }
+  const duplicated = data.tariffPlans.find((item) => item.code === code);
+  if (duplicated) {
+    throw new Error("Ya existe una tarifa con ese código");
+  }
+  const plan: TariffPlan = {
+    id: crypto.randomUUID(),
+    code,
+    title,
+    season: (input.season ?? "").trim(),
+    validFrom: (input.validFrom ?? "").trim(),
+    validTo: (input.validTo ?? "").trim(),
+    priceMode:
+      input.priceMode === "PRECIO_B" ? "PRECIO_B" : input.priceMode === "PRECIO_C" ? "PRECIO_C" : "PRECIO_A",
+    active: input.active === "false" ? false : true,
+    notes: (input.notes ?? "").trim(),
+    createdAt: new Date().toISOString(),
+    createdBy: actor.id,
+    updatedAt: new Date().toISOString(),
+    updatedBy: actor.id,
+  };
+  data.tariffPlans.push(plan);
+  await writeRentalData(data);
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "tariff_plan",
+    entityId: plan.id,
+    details: { code: plan.code, title: plan.title },
+  });
+}
+
+export async function updateTariffPlan(
+  tariffPlanId: string,
+  input: Record<string, string>,
+  actor: { id: string; role: RoleName },
+) {
+  const data = await readRentalData();
+  const plan = data.tariffPlans.find((item) => item.id === tariffPlanId);
+  if (!plan) {
+    throw new Error("Tarifa no encontrada");
+  }
+
+  const nextTitle = (input.title ?? "").trim();
+  if (!nextTitle) {
+    throw new Error("Nombre de tarifa obligatorio");
+  }
+
+  plan.title = nextTitle;
+  plan.season = (input.season ?? plan.season).trim();
+  plan.validFrom = (input.validFrom ?? plan.validFrom).trim();
+  plan.validTo = (input.validTo ?? plan.validTo).trim();
+  plan.active = input.active === "false" ? false : true;
+  plan.notes = (input.notes ?? plan.notes).trim();
+  plan.updatedAt = new Date().toISOString();
+  plan.updatedBy = actor.id;
+
+  await writeRentalData(data);
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "tariff_plan_update",
+    entityId: plan.id,
+    details: { code: plan.code, title: plan.title, validFrom: plan.validFrom, validTo: plan.validTo },
+  });
+}
+
+export async function listTariffCatalog(tariffPlanId: string) {
+  const data = await readRentalData();
+  const plan = data.tariffPlans.find((item) => item.id === tariffPlanId) ?? null;
+  const brackets = data.tariffBrackets
+    .filter((item) => item.tariffPlanId === tariffPlanId)
+    .toSorted((a, b) => a.order - b.order);
+  const groups = data.vehicleCategories.map((item) => item.code || item.name).filter(Boolean);
+  const prices = data.tariffPrices.filter((item) => item.tariffPlanId === tariffPlanId);
+  return { plan, brackets, groups, prices };
+}
+
+export async function upsertTariffBracket(input: Record<string, string>, actor: { id: string; role: RoleName }) {
+  const data = await readRentalData();
+  const tariffPlanId = (input.tariffPlanId ?? "").trim();
+  if (!tariffPlanId) {
+    throw new Error("Tarifa obligatoria");
+  }
+  const plan = data.tariffPlans.find((item) => item.id === tariffPlanId);
+  if (!plan) {
+    throw new Error("Tarifa no encontrada");
+  }
+  const bracketId = (input.bracketId ?? "").trim();
+  const label = (input.label ?? "").trim();
+  const fromDay = parseNumber(input.fromDay ?? "0");
+  const toDay = parseNumber(input.toDay ?? "0");
+  const order = parseNumber(input.order ?? "0");
+  if (!label || fromDay <= 0 || toDay <= 0 || fromDay > toDay) {
+    throw new Error("Tramo inválido");
+  }
+  const now = new Date().toISOString();
+  if (!bracketId) {
+    data.tariffBrackets.push({
+      id: crypto.randomUUID(),
+      tariffPlanId,
+      label,
+      fromDay,
+      toDay,
+      order: order || data.tariffBrackets.filter((item) => item.tariffPlanId === tariffPlanId).length + 1,
+      isExtraDay: input.isExtraDay === "true",
+      createdAt: now,
+      createdBy: actor.id,
+      updatedAt: now,
+      updatedBy: actor.id,
+    });
+  } else {
+    const bracket = data.tariffBrackets.find((item) => item.id === bracketId && item.tariffPlanId === tariffPlanId);
+    if (!bracket) {
+      throw new Error("Tramo no encontrado");
+    }
+    bracket.label = label;
+    bracket.fromDay = fromDay;
+    bracket.toDay = toDay;
+    bracket.order = order || bracket.order;
+    bracket.isExtraDay = input.isExtraDay === "true";
+    bracket.updatedAt = now;
+    bracket.updatedBy = actor.id;
+  }
+  plan.updatedAt = now;
+  plan.updatedBy = actor.id;
+  await writeRentalData(data);
+}
+
+export async function deleteTariffBracket(bracketId: string, actor: { id: string; role: RoleName }) {
+  const data = await readRentalData();
+  const bracket = data.tariffBrackets.find((item) => item.id === bracketId);
+  if (!bracket) {
+    throw new Error("Tramo no encontrado");
+  }
+  data.tariffBrackets = data.tariffBrackets.filter((item) => item.id !== bracketId);
+  data.tariffPrices = data.tariffPrices.filter((item) => item.bracketId !== bracketId);
+  await writeRentalData(data);
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "tariff_bracket_delete",
+    entityId: bracket.id,
+    details: { label: bracket.label, tariffPlanId: bracket.tariffPlanId },
+  });
+}
+
+export async function upsertTariffPrice(input: Record<string, string>, actor: { id: string; role: RoleName }) {
+  const data = await readRentalData();
+  const tariffPlanId = (input.tariffPlanId ?? "").trim();
+  const bracketId = (input.bracketId ?? "").trim();
+  const groupCode = (input.groupCode ?? "").trim().toUpperCase();
+  const price = parseNumber(input.price ?? "0");
+  const maxKmPerDay = parseNumber(input.maxKmPerDay ?? "0");
+  if (!tariffPlanId || !bracketId || !groupCode) {
+    throw new Error("Tarifa, tramo y grupo son obligatorios");
+  }
+  const plan = data.tariffPlans.find((item) => item.id === tariffPlanId);
+  if (!plan) {
+    throw new Error("Tarifa no encontrada");
+  }
+  const bracket = data.tariffBrackets.find((item) => item.id === bracketId && item.tariffPlanId === tariffPlanId);
+  if (!bracket) {
+    throw new Error("Tramo no encontrado");
+  }
+  const existing = data.tariffPrices.find(
+    (item) => item.tariffPlanId === tariffPlanId && item.bracketId === bracketId && item.groupCode === groupCode,
+  );
+  const now = new Date().toISOString();
+  if (existing) {
+    existing.price = price;
+    existing.maxKmPerDay = maxKmPerDay;
+    existing.updatedAt = now;
+    existing.updatedBy = actor.id;
+  } else {
+    const row: TariffPrice = {
+      id: crypto.randomUUID(),
+      tariffPlanId,
+      groupCode,
+      bracketId,
+      price,
+      maxKmPerDay,
+      createdAt: now,
+      createdBy: actor.id,
+      updatedAt: now,
+      updatedBy: actor.id,
+    };
+    data.tariffPrices.push(row);
+  }
+  plan.updatedAt = now;
+  plan.updatedBy = actor.id;
+  await writeRentalData(data);
+}
+
+export async function deleteTariffPlan(tariffPlanId: string, actor: { id: string; role: RoleName }) {
+  const data = await readRentalData();
+  const plan = data.tariffPlans.find((item) => item.id === tariffPlanId);
+  if (!plan) {
+    throw new Error("Tarifa no encontrada");
+  }
+  const inReservations = data.reservations.some((item) => item.appliedRate.trim() === plan.code.trim());
+  const inClients = data.clients.some((item) => item.associatedRate.trim() === plan.code.trim());
+  if (inReservations || inClients) {
+    throw new Error("No se puede borrar tarifa usada por reservas o clientes");
+  }
+  data.tariffPlans = data.tariffPlans.filter((item) => item.id !== tariffPlanId);
+  data.tariffBrackets = data.tariffBrackets.filter((item) => item.tariffPlanId !== tariffPlanId);
+  data.tariffPrices = data.tariffPrices.filter((item) => item.tariffPlanId !== tariffPlanId);
+  await writeRentalData(data);
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "tariff_plan_delete",
+    entityId: plan.id,
+    details: { code: plan.code, title: plan.title },
+  });
+}
+
+export async function calculateTariffQuote(input: {
+  tariffPlanId: string;
+  groupCode: string;
+  billedDays: number;
+}): Promise<{ found: boolean; amount: number; bracketLabel: string }> {
+  const data = await readRentalData();
+  const brackets = data.tariffBrackets
+    .filter((item) => item.tariffPlanId === input.tariffPlanId)
+    .toSorted((a, b) => a.order - b.order);
+  const selected = brackets.find((item) => input.billedDays >= item.fromDay && input.billedDays <= item.toDay);
+  if (!selected) {
+    const extra = brackets.find((item) => item.isExtraDay);
+    if (!extra) {
+      return { found: false, amount: 0, bracketLabel: "" };
+    }
+    const priceRow = data.tariffPrices.find(
+      (item) =>
+        item.tariffPlanId === input.tariffPlanId &&
+        item.bracketId === extra.id &&
+        item.groupCode.toUpperCase() === input.groupCode.toUpperCase(),
+    );
+    const amount = (priceRow?.price ?? 0) * input.billedDays;
+    return { found: Boolean(priceRow), amount, bracketLabel: extra.label };
+  }
+  const priceRow = data.tariffPrices.find(
+    (item) =>
+      item.tariffPlanId === input.tariffPlanId &&
+      item.bracketId === selected.id &&
+      item.groupCode.toUpperCase() === input.groupCode.toUpperCase(),
+  );
+  return {
+    found: Boolean(priceRow),
+    amount: priceRow?.price ?? 0,
+    bracketLabel: selected.label,
+  };
+}
+
+// -------------------- Plantillas documentales --------------------
+export async function listTemplates(query: string) {
+  const data = await readRentalData();
+  const q = query.trim().toLowerCase();
+  return data.templates
+    .filter((item) => {
+      if (!q) {
+        return true;
+      }
+      return [item.templateCode, item.templateType, item.language, item.title].join(" ").toLowerCase().includes(q);
+    })
+    .toSorted((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+export async function createTemplate(input: Record<string, string>, actor: { id: string; role: RoleName }) {
+  const data = await readRentalData();
+  const templateTypeRaw = (input.templateType ?? "CONTRATO").toUpperCase();
+  const templateType = (["CONTRATO", "CONFIRMACION_RESERVA", "FACTURA"] as const).includes(
+    templateTypeRaw as "CONTRATO" | "CONFIRMACION_RESERVA" | "FACTURA",
+  )
+    ? (templateTypeRaw as "CONTRATO" | "CONFIRMACION_RESERVA" | "FACTURA")
+    : "CONTRATO";
+  const templateCode = (input.templateCode ?? "").trim().toUpperCase();
+  const language = (input.language ?? "").trim().toLowerCase();
+  const title = (input.title ?? "").trim();
+  const htmlContent = (input.htmlContent ?? "").trim();
+
+  if (!templateCode || !language || !title || !htmlContent) {
+    throw new Error("Faltan campos obligatorios de plantilla");
+  }
+
+  const exists = data.templates.find((item) => item.templateCode === templateCode && item.language === language);
+  if (exists) {
+    throw new Error("Ya existe plantilla con mismo código e idioma");
+  }
+
+  const template = {
+    id: crypto.randomUUID(),
+    templateCode,
+    templateType,
+    language,
+    title,
+    htmlContent,
+    active: true,
+    createdAt: new Date().toISOString(),
+    createdBy: actor.id,
+    updatedAt: new Date().toISOString(),
+    updatedBy: actor.id,
+  };
+  data.templates.push(template);
+  await writeRentalData(data);
+}
+
+export async function updateTemplate(input: Record<string, string>, actor: { id: string; role: RoleName }) {
+  const data = await readRentalData();
+  const templateId = (input.templateId ?? "").trim();
+  const template = data.templates.find((item) => item.id === templateId);
+  if (!template) {
+    throw new Error("Plantilla no encontrada");
+  }
+
+  template.title = (input.title ?? template.title).trim();
+  template.language = (input.language ?? template.language).trim().toLowerCase() || template.language;
+  template.htmlContent = (input.htmlContent ?? template.htmlContent).trim() || template.htmlContent;
+  template.active = input.active === "false" ? false : true;
+  template.updatedAt = new Date().toISOString();
+  template.updatedBy = actor.id;
+
+  await writeRentalData(data);
+}
+
+export async function deleteTemplate(templateId: string, actor: { id: string; role: RoleName }) {
+  const data = await readRentalData();
+  const template = data.templates.find((item) => item.id === templateId);
+  if (!template) {
+    throw new Error("Plantilla no encontrada");
+  }
+  data.templates = data.templates.filter((item) => item.id !== templateId);
+  await writeRentalData(data);
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "template_delete",
+    entityId: template.id,
+    details: { templateCode: template.templateCode, language: template.language },
+  });
+}
+
+// Helpers internos para transformar datos de listados y parsing de importes.
+function mapListRow(reservation: Reservation, contract: Contract | null, mode: "DELIVERY" | "PICKUP"): DeliveryPickupListRow {
+  const start = parseDateSafe(reservation.deliveryAt);
+  const end = parseDateSafe(reservation.pickupAt);
+  const dayMs = 1000 * 60 * 60 * 24;
+  const days = start && end ? Math.max(1, Math.ceil((end.getTime() - start.getTime()) / dayMs)) : 0;
+  return {
+    reservationId: reservation.id,
+    reservationNumber: reservation.reservationNumber,
+    hasContract: Boolean(contract),
+    contractNumber: contract?.contractNumber ?? "",
+    customerName: reservation.customerName,
+    place: mode === "DELIVERY" ? reservation.deliveryPlace : reservation.pickupPlace,
+    branch: mode === "DELIVERY" ? reservation.branchDelivery : reservation.pickupBranch,
+    datetime: mode === "DELIVERY" ? reservation.deliveryAt : reservation.pickupAt,
+    vehiclePlate: reservation.assignedPlate,
+    totalPrice: reservation.totalPrice,
+    days,
+    privateNotes: reservation.privateNotes,
+  };
+}
+
+function splitAmountEqually(totalAmount: number, buckets: number): number[] {
+  if (buckets <= 0) {
+    return [];
+  }
+  const cents = Math.round(totalAmount * 100);
+  const base = Math.trunc(cents / buckets);
+  const remainder = cents - base * buckets;
+  const result: number[] = [];
+  for (let index = 0; index < buckets; index += 1) {
+    result.push((base + (index < remainder ? 1 : 0)) / 100);
+  }
+  return result;
+}
+
+function parseDailyExpenseMeta(note: string): { batchId: string; workerName: string } {
+  const batchMatch = note.match(/\[BATCH:([^\]]+)\]/i);
+  const workerMatch = note.match(/empleado=([^;]+)/i);
+  return {
+    batchId: batchMatch?.[1]?.trim() || "",
+    workerName: workerMatch?.[1]?.trim() || "",
+  };
+}

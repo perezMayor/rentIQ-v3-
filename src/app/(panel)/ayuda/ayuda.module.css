@@ -1,0 +1,94 @@
+.root {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.hero,
+.section {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fff;
+  padding: 0.85rem;
+}
+
+.hero p,
+.section p {
+  color: #6b7280;
+}
+
+.section {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.anchorGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.5rem;
+}
+
+.anchorLink {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #f9fafb;
+  font-weight: 600;
+  font-size: 0.86rem;
+}
+
+.anchorLink:hover {
+  background: #f3f4f6;
+}
+
+.steps {
+  margin-left: 1.1rem;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.steps li {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.topic {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #f9fafb;
+  padding: 0.7rem;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.list {
+  margin-left: 1rem;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.inlineLink {
+  color: #2563eb;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  width: fit-content;
+}
+
+.inlineGroup {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+
+@media (max-width: 900px) {
+  .hero,
+  .section {
+    padding: 0.75rem;
+  }
+
+  .anchorGrid {
+    grid-template-columns: 1fr;
+  }
+}
