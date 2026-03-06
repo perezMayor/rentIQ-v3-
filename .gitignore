@@ -30,6 +30,14 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+*.pid
+.dev*.pid
+.dev.log
+.start*.log
+.tunnel.log
+
+# e2e temporal outputs
+test-results/
 
 # env files (can opt-in for committing if needed)
 .env*
