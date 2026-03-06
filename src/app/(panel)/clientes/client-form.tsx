@@ -1,4 +1,5 @@
 "use client";
+// Módulo client-form.tsx.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -79,7 +80,6 @@ export function ClientForm({ action, deactivateAction, canWrite, nextClientCode,
     <div className="stack-md">
       <form action={action} className="stack-md">
       <section className="card-muted stack-sm">
-        <h4>Recuadro principal</h4>
         <div className="form-grid">
           <label>
             Tipo cliente
@@ -96,18 +96,18 @@ export function ClientForm({ action, deactivateAction, canWrite, nextClientCode,
           </label>
           <label>
             ID
-            <input value={nextClientCode} readOnly />
+            <input value={nextClientCode ?? ""} readOnly />
           </label>
 
           {isParticular ? (
             <>
               <label>
                 Nombre *
-                <input name="firstName" value={firstName} onChange={(e) => setFirstName(e.target.value)} required disabled={!canWrite} />
+                <input name="firstName" value={firstName ?? ""} onChange={(e) => setFirstName(e.target.value)} required disabled={!canWrite} />
               </label>
               <label>
                 Apellidos *
-                <input name="lastName" value={lastName} onChange={(e) => setLastName(e.target.value)} required disabled={!canWrite} />
+                <input name="lastName" value={lastName ?? ""} onChange={(e) => setLastName(e.target.value)} required disabled={!canWrite} />
               </label>
 
               <label>
@@ -122,12 +122,12 @@ export function ClientForm({ action, deactivateAction, canWrite, nextClientCode,
               </label>
               <label>
                 Nº documento *
-                <input name="documentNumber" value={documentNumber} onChange={(e) => setDocumentNumber(e.target.value)} required disabled={!canWrite} />
+                <input name="documentNumber" value={documentNumber ?? ""} onChange={(e) => setDocumentNumber(e.target.value)} required disabled={!canWrite} />
               </label>
 
               <label>
                 Carné de conducir *
-                <input name="licenseNumber" value={licenseNumber} onChange={(e) => setLicenseNumber(e.target.value)} required disabled={!canWrite} />
+                <input name="licenseNumber" value={licenseNumber ?? ""} onChange={(e) => setLicenseNumber(e.target.value)} required disabled={!canWrite} />
               </label>
               <div aria-hidden="true" />
 
@@ -160,7 +160,7 @@ export function ClientForm({ action, deactivateAction, canWrite, nextClientCode,
 
               <label>
                 Mail *
-                <input name="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required disabled={!canWrite} />
+                <input name="email" type="email" value={email ?? ""} onChange={(e) => setEmail(e.target.value)} required disabled={!canWrite} />
               </label>
               <label>
                 Teléfono 1 *
@@ -220,11 +220,11 @@ export function ClientForm({ action, deactivateAction, canWrite, nextClientCode,
               </label>
               <label>
                 NIF/CIF *
-                <input name="taxId" value={taxId} onChange={(e) => setTaxId(e.target.value)} required disabled={!canWrite} />
+                <input name="taxId" value={taxId ?? ""} onChange={(e) => setTaxId(e.target.value)} required disabled={!canWrite} />
               </label>
               <label>
                 Mail *
-                <input name="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required disabled={!canWrite} />
+                <input name="email" type="email" value={email ?? ""} onChange={(e) => setEmail(e.target.value)} required disabled={!canWrite} />
               </label>
               <label>
                 Teléfono
@@ -335,7 +335,7 @@ export function ClientForm({ action, deactivateAction, canWrite, nextClientCode,
             <textarea name="notes" rows={2} disabled={!canWrite} />
           </label>
           <label className="col-span-2">
-            Avisos (se mostrarán al introducir nombre existente)
+            Avisos
             <textarea name="warnings" rows={2} disabled={!canWrite} />
           </label>
         </div>

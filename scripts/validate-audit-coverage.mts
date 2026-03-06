@@ -1,3 +1,4 @@
+// Módulo validate-audit-coverage.mts.
 import { readAllAuditEvents } from "@/lib/audit";
 import { readRentalData } from "@/lib/services/rental-store";
 

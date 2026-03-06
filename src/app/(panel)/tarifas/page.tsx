@@ -1,3 +1,4 @@
+// Página del módulo tarifas.
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { appendAuditEvent } from "@/lib/audit";
@@ -6,6 +7,8 @@ import {
   createTariffPlan,
   deleteTariffBracket,
   deleteTariffPlan,
+  importTariffCatalogFromCsv,
+  listVehicleCategories,
   listTariffCatalog,
   listTariffPlans,
   updateTariffPlan,
@@ -14,7 +17,7 @@ import {
 } from "@/lib/services/rental-service";
 
 type Props = {
-  searchParams: Promise<{ q?: string; tariffPlanId?: string; error?: string }>;
+  searchParams: Promise<{ q?: string; tariffPlanId?: string; error?: string; ok?: string }>;
 };
 
 export default async function TarifasPage({ searchParams }: Props) {
@@ -38,6 +41,7 @@ export default async function TarifasPage({ searchParams }: Props) {
   const params = await searchParams;
   const q = params.q ?? "";
   const plans = await listTariffPlans(q);
+  const vehicleCategories = await listVehicleCategories();
   const tariffPlanId = params.tariffPlanId ?? plans[0]?.id ?? "";
   const catalog = tariffPlanId ? await listTariffCatalog(tariffPlanId) : { plan: null, brackets: [], groups: [], prices: [] };
 
@@ -46,14 +50,63 @@ export default async function TarifasPage({ searchParams }: Props) {
     const actor = await getSessionUser();
     if (!actor) redirect("/login");
     const input = Object.fromEntries(formData.entries()) as Record<string, string>;
+    const planCode = String(input.code ?? "").trim().toUpperCase();
     try {
       await createTariffPlan(input, { id: actor.id, role: actor.role });
+      const initialGroupCode = String(input.initialGroupCode ?? "").trim().toUpperCase();
+      const initialLabel = String(input.initialBracketLabel ?? "").trim();
+      const initialFromDay = String(input.initialFromDay ?? "").trim();
+      const initialToDay = String(input.initialToDay ?? "").trim();
+      const initialPrice = String(input.initialPrice ?? "").trim();
+      const initialMaxKmPerDay = String(input.initialMaxKmPerDay ?? "").trim();
+      const hasInitialPricing = [initialGroupCode, initialLabel, initialPrice].some((value) => value.length > 0);
+      if (hasInitialPricing) {
+        if (!initialGroupCode || !initialLabel || !initialPrice) {
+          throw new Error("Para cargar importes al crear la tarifa, indica grupo, tramo e importe");
+        }
+        const allPlans = await listTariffPlans(planCode);
+        const createdPlan = allPlans.find((plan) => plan.code === planCode);
+        if (!createdPlan) {
+          throw new Error("No se pudo recuperar la tarifa recién creada");
+        }
+        await upsertTariffBracket(
+          {
+            tariffPlanId: createdPlan.id,
+            label: initialLabel,
+            fromDay: initialFromDay || "1",
+            toDay: initialToDay || "1",
+            order: "1",
+            isExtraDay: "false",
+          },
+          { id: actor.id, role: actor.role },
+        );
+        const refreshed = await listTariffCatalog(createdPlan.id);
+        const savedBracket = refreshed.brackets.find(
+          (item) =>
+            item.label === initialLabel &&
+            item.fromDay === Number(initialFromDay || "1") &&
+            item.toDay === Number(initialToDay || "1"),
+        );
+        if (!savedBracket) {
+          throw new Error("No se pudo recuperar el tramo inicial");
+        }
+        await upsertTariffPrice(
+          {
+            tariffPlanId: createdPlan.id,
+            groupCode: initialGroupCode,
+            bracketId: savedBracket.id,
+            price: initialPrice,
+            maxKmPerDay: initialMaxKmPerDay || "0",
+          },
+          { id: actor.id, role: actor.role },
+        );
+      }
       revalidatePath("/tarifas");
-      redirect("/tarifas");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Error creando tarifa";
       redirect(`/tarifas?error=${encodeURIComponent(message)}`);
     }
+    redirect("/tarifas");
   }
 
   async function saveBracketAction(formData: FormData) {
@@ -64,11 +117,11 @@ export default async function TarifasPage({ searchParams }: Props) {
     try {
       await upsertTariffBracket(input, { id: actor.id, role: actor.role });
       revalidatePath("/tarifas");
-      redirect(`/tarifas?tariffPlanId=${encodeURIComponent(input.tariffPlanId)}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Error guardando tramo";
       redirect(`/tarifas?tariffPlanId=${encodeURIComponent(input.tariffPlanId ?? "")}&error=${encodeURIComponent(message)}`);
     }
+    redirect(`/tarifas?tariffPlanId=${encodeURIComponent(input.tariffPlanId)}`);
   }
 
   async function saveMatrixAction(formData: FormData) {
@@ -96,11 +149,35 @@ export default async function TarifasPage({ searchParams }: Props) {
         );
       }
       revalidatePath("/tarifas");
-      redirect(`/tarifas?tariffPlanId=${encodeURIComponent(planId)}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Error guardando tabla";
       redirect(`/tarifas?tariffPlanId=${encodeURIComponent(planId)}&error=${encodeURIComponent(message)}`);
     }
+    redirect(`/tarifas?tariffPlanId=${encodeURIComponent(planId)}`);
+  }
+
+  async function importTariffCsvAction(formData: FormData) {
+    "use server";
+    const actor = await getSessionUser();
+    if (!actor) redirect("/login");
+    const csvFile = formData.get("tariffCsvFile");
+    if (!(csvFile instanceof File) || csvFile.size === 0) {
+      redirect("/tarifas?error=Debes+adjuntar+un+CSV");
+    }
+    if (csvFile.size > 4 * 1024 * 1024) {
+      redirect("/tarifas?error=CSV+demasiado+grande+(max+4MB)");
+    }
+    let okMessage = "";
+    try {
+      const csvRaw = Buffer.from(await csvFile.arrayBuffer()).toString("utf8");
+      const result = await importTariffCatalogFromCsv(csvRaw, { id: actor.id, role: actor.role });
+      revalidatePath("/tarifas");
+      okMessage = `Importación OK: filas ${result.rows}, planes +${result.plansCreated}/${result.plansUpdated} act., tramos +${result.bracketsCreated}/${result.bracketsUpdated} act., precios +${result.pricesCreated}/${result.pricesUpdated} act.`;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Error importando tarifas";
+      redirect(`/tarifas?error=${encodeURIComponent(message)}`);
+    }
+    redirect(`/tarifas?ok=${encodeURIComponent(okMessage)}`);
   }
 
   async function updatePlanAction(formData: FormData) {
@@ -112,11 +189,11 @@ export default async function TarifasPage({ searchParams }: Props) {
     try {
       await updateTariffPlan(planId, input, { id: actor.id, role: actor.role });
       revalidatePath("/tarifas");
-      redirect(`/tarifas?tariffPlanId=${encodeURIComponent(planId)}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Error actualizando tarifa";
       redirect(`/tarifas?tariffPlanId=${encodeURIComponent(planId)}&error=${encodeURIComponent(message)}`);
     }
+    redirect(`/tarifas?tariffPlanId=${encodeURIComponent(planId)}`);
   }
 
   async function deletePlanAction(formData: FormData) {
@@ -127,11 +204,11 @@ export default async function TarifasPage({ searchParams }: Props) {
     try {
       await deleteTariffPlan(planId, { id: actor.id, role: actor.role });
       revalidatePath("/tarifas");
-      redirect("/tarifas");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Error borrando tarifa";
       redirect(`/tarifas?tariffPlanId=${encodeURIComponent(planId)}&error=${encodeURIComponent(message)}`);
     }
+    redirect("/tarifas");
   }
 
   async function deleteBracketAction(formData: FormData) {
@@ -143,27 +220,34 @@ export default async function TarifasPage({ searchParams }: Props) {
     try {
       await deleteTariffBracket(bracketId, { id: actor.id, role: actor.role });
       revalidatePath("/tarifas");
-      redirect(`/tarifas?tariffPlanId=${encodeURIComponent(planId)}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Error borrando tramo";
       redirect(`/tarifas?tariffPlanId=${encodeURIComponent(planId)}&error=${encodeURIComponent(message)}`);
     }
+    redirect(`/tarifas?tariffPlanId=${encodeURIComponent(planId)}`);
   }
 
   return (
     <div className="stack-lg">
-      <header className="stack-sm">
-        <h2>Tarifas</h2>
-        <p className="muted-text">Vista tipo Excel: filas por grupo y columnas por tramo.</p>
-      </header>
-
       {params.error ? <p className="danger-text">{params.error}</p> : null}
+      {params.ok ? <p>{params.ok}</p> : null}
 
       <section className="card stack-sm">
         <h3>Tarifas</h3>
         <form action={createPlanAction} className="inline-search">
           <input name="code" placeholder="Código" required />
           <input name="title" placeholder="Título" required />
+          <select name="initialGroupCode" defaultValue="">
+            <option value="">Grupo (opcional)</option>
+            {vehicleCategories.map((category) => (
+              <option key={category.id} value={category.code}>{category.code}</option>
+            ))}
+          </select>
+          <input name="initialBracketLabel" placeholder="Tramo (opcional)" />
+          <input name="initialFromDay" type="number" min={1} placeholder="Días desde" />
+          <input name="initialToDay" type="number" min={1} placeholder="Días hasta" />
+          <input name="initialPrice" type="number" step="0.01" placeholder="Importe" />
+          <input name="initialMaxKmPerDay" type="number" step="1" min={0} placeholder="Km/día" />
           <button className="primary-btn" type="submit">Crear</button>
         </form>
         <form method="GET" className="inline-search">
@@ -341,6 +425,14 @@ export default async function TarifasPage({ searchParams }: Props) {
           </section>
         </>
       ) : null}
+
+      <section className="card stack-sm">
+        <h3>Importación por archivo (CSV estándar)</h3>
+        <form action={importTariffCsvAction} className="inline-search import-compact">
+          <input name="tariffCsvFile" type="file" accept=".csv,text/csv" required />
+          <button className="secondary-btn" type="submit">Importar CSV</button>
+        </form>
+      </section>
     </div>
   );
 }

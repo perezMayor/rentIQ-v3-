@@ -1,7 +1,10 @@
 import { appendAuditEvent, readAuditEventsByContract, readAuditEventsByReservation } from "@/lib/audit";
 import { getDocumentCompanyName } from "@/lib/company-brand";
 import { sendMailFromCompany } from "@/lib/mail";
+import { getTemplatePresetHtml } from "@/lib/services/template-presets";
+import { buildReservationTemplateData, getReservationBaseTemplate, renderTemplateWithMacros } from "@/lib/services/template-renderer";
 import type {
+  BranchScheduleConfig,
   Client,
   Contract,
   FleetVehicle,
@@ -20,6 +23,7 @@ import type {
   UserAccount,
 } from "@/lib/domain/rental";
 import { readRentalData, writeRentalData } from "@/lib/services/rental-store";
+import { createHash } from "node:crypto";
 
 // Helpers de normalización y cálculo usados por distintos módulos de negocio.
 function getYear(inputIsoDate: string): string {
@@ -34,6 +38,21 @@ function getYearShort(inputIsoDate: string): string {
 function normalizeBranchCode(input: string): string {
   const cleaned = input.trim().toUpperCase().replace(/\s+/g, "-");
   return cleaned || "SUC-ND";
+}
+
+function resolveBranchCodeFromInput(input: string, branches: Array<{ code: string; name: string }>): string {
+  const raw = input.trim();
+  if (!raw) return "SUC-ND";
+  const rawUpper = raw.toUpperCase();
+  const normalizedRaw = rawUpper.replace(/\s+/g, " ");
+
+  const byCode = branches.find((item) => item.code.trim().toUpperCase() === rawUpper);
+  if (byCode) return normalizeBranchCode(byCode.code);
+
+  const byName = branches.find((item) => item.name.trim().toUpperCase().replace(/\s+/g, " ") === normalizedRaw);
+  if (byName) return normalizeBranchCode(byName.code);
+
+  return normalizeBranchCode(raw);
 }
 
 function parseNumber(input: string): number {
@@ -73,6 +92,110 @@ type SelectedExtraInput = {
 
 function normalizeOwnerName(input: string): string {
   return input.trim().replace(/\s+/g, " ").toUpperCase();
+}
+
+const WEEKDAY_KEYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"] as const;
+
+function normalizeTimeSlot(input: string, fallback: string) {
+  const value = input.trim();
+  return /^\d{2}:\d{2}$/.test(value) ? value : fallback;
+}
+
+function defaultBranchDay() {
+  return {
+    enabled: true,
+    start1: "08:00",
+    end1: "13:00",
+    start2: "16:00",
+    end2: "20:00",
+  };
+}
+
+function defaultBranchSchedule(nowIso: string, actorId: string): BranchScheduleConfig {
+  const sunday = defaultBranchDay();
+  sunday.enabled = false;
+  return {
+    periodLabel: "POR DEFECTO",
+    timezone: "Europe/Madrid",
+    language: "es",
+    weekly: {
+      monday: defaultBranchDay(),
+      tuesday: defaultBranchDay(),
+      wednesday: defaultBranchDay(),
+      thursday: defaultBranchDay(),
+      friday: defaultBranchDay(),
+      saturday: defaultBranchDay(),
+      sunday,
+    },
+    exceptions: [],
+    updatedAt: nowIso,
+    updatedBy: actorId,
+  };
+}
+
+function normalizeBranchSchedules(
+  input: unknown,
+  fallback: Record<string, BranchScheduleConfig>,
+  nowIso: string,
+  actorId: string,
+): Record<string, BranchScheduleConfig> {
+  if (!input || typeof input !== "object") return fallback;
+  const source = input as Record<string, unknown>;
+  const result: Record<string, BranchScheduleConfig> = {};
+
+  for (const [codeRaw, value] of Object.entries(source)) {
+    const code = normalizeBranchCode(codeRaw);
+    if (!value || typeof value !== "object") continue;
+    const item = value as Record<string, unknown>;
+    const base = defaultBranchSchedule(nowIso, actorId);
+    const weeklyRaw = item.weekly && typeof item.weekly === "object" ? (item.weekly as Record<string, unknown>) : {};
+    const weekly = { ...base.weekly };
+    for (const dayKey of WEEKDAY_KEYS) {
+      const dayRaw = weeklyRaw[dayKey];
+      if (!dayRaw || typeof dayRaw !== "object") continue;
+      const dayObj = dayRaw as Record<string, unknown>;
+      weekly[dayKey] = {
+        enabled: typeof dayObj.enabled === "boolean" ? dayObj.enabled : base.weekly[dayKey].enabled,
+        start1: normalizeTimeSlot(String(dayObj.start1 ?? base.weekly[dayKey].start1), base.weekly[dayKey].start1),
+        end1: normalizeTimeSlot(String(dayObj.end1 ?? base.weekly[dayKey].end1), base.weekly[dayKey].end1),
+        start2: normalizeTimeSlot(String(dayObj.start2 ?? base.weekly[dayKey].start2), base.weekly[dayKey].start2),
+        end2: normalizeTimeSlot(String(dayObj.end2 ?? base.weekly[dayKey].end2), base.weekly[dayKey].end2),
+      };
+    }
+    const exceptionsRaw = Array.isArray(item.exceptions) ? item.exceptions : [];
+    const exceptions = exceptionsRaw
+      .map((entry) => {
+        if (!entry || typeof entry !== "object") return null;
+        const row = entry as Record<string, unknown>;
+        const date = String(row.date ?? "").trim();
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+        const modeRaw = String(row.mode ?? "ABIERTA").toUpperCase();
+        const mode = modeRaw === "CERRADA" ? "CERRADA" : "ABIERTA";
+        return {
+          date,
+          mode,
+          start1: normalizeTimeSlot(String(row.start1 ?? "08:00"), "08:00"),
+          end1: normalizeTimeSlot(String(row.end1 ?? "13:00"), "13:00"),
+          start2: normalizeTimeSlot(String(row.start2 ?? "16:00"), "16:00"),
+          end2: normalizeTimeSlot(String(row.end2 ?? "20:00"), "20:00"),
+          note: String(row.note ?? "").trim(),
+        };
+      })
+      .filter((entry): entry is BranchScheduleConfig["exceptions"][number] => entry !== null)
+      .toSorted((a, b) => a.date.localeCompare(b.date));
+
+    result[code] = {
+      periodLabel: String(item.periodLabel ?? base.periodLabel).trim() || base.periodLabel,
+      timezone: String(item.timezone ?? base.timezone).trim() || base.timezone,
+      language: String(item.language ?? base.language).trim() || base.language,
+      weekly,
+      exceptions,
+      updatedAt: String(item.updatedAt ?? nowIso),
+      updatedBy: String(item.updatedBy ?? actorId),
+    };
+  }
+
+  return result;
 }
 
 function parseSelectedExtrasPayload(payloadRaw: string): SelectedExtraInput[] {
@@ -153,11 +276,46 @@ function normalizeInvoiceSeries(input: string, fallback: string): string {
 }
 
 function buildContractNumber(yearShort: string, branchCode: string, counter: number): string {
-  return `${yearShort}-${branchCode}-${String(counter).padStart(5, "0")}`;
+  const branchToken = branchCode.replace(/[^A-Z0-9]/gi, "").toUpperCase() || "ND";
+  return `${yearShort}/${branchToken}/${String(counter).padStart(4, "0")}`;
 }
 
-function buildInvoiceNumber(series: string, yearShort: string, branchCode: string, counter: number): string {
-  return `${series}${yearShort}-${branchCode}-${String(counter).padStart(5, "0")}`;
+function buildInvoiceNumber(series: string, counter: number): string {
+  return `${series}${String(counter).padStart(8, "0")}`;
+}
+
+function createSignatureEvidenceHash(input: {
+  contractId: string;
+  phase: "CHECKOUT" | "CHECKIN";
+  signerName: string;
+  signerId: string;
+  notes: string;
+  km: number;
+  fuelLevel: string;
+  signedAtIso: string;
+}): string {
+  const raw = [
+    input.contractId,
+    input.phase,
+    input.signerName.trim().toUpperCase(),
+    input.signerId.trim().toUpperCase(),
+    input.notes.trim(),
+    String(input.km),
+    input.fuelLevel.trim().toUpperCase(),
+    input.signedAtIso,
+  ].join("|");
+  return createHash("sha256").update(raw).digest("hex");
+}
+
+function resolveInvoiceCounterKey(input: {
+  scope: "GLOBAL" | "BRANCH";
+  branchCode: string;
+  invoiceSeries: string;
+}): string {
+  if (input.scope === "GLOBAL") {
+    return `GLOBAL-${input.invoiceSeries}`;
+  }
+  return `BRANCH-${input.branchCode}-${input.invoiceSeries}`;
 }
 
 function parseDateSafe(value: string): Date | null {
@@ -166,6 +324,44 @@ function parseDateSafe(value: string): Date | null {
     return null;
   }
   return parsed;
+}
+
+function reservationAuditSnapshot(input: Reservation) {
+  return {
+    reservationStatus: input.reservationStatus,
+    customerName: input.customerName,
+    branchDelivery: input.branchDelivery,
+    deliveryAt: input.deliveryAt,
+    pickupAt: input.pickupAt,
+    billedCarGroup: input.billedCarGroup,
+    assignedPlate: input.assignedPlate,
+    baseAmount: Number(input.baseAmount.toFixed(2)),
+    discountAmount: Number(input.discountAmount.toFixed(2)),
+    extrasAmount: Number(input.extrasAmount.toFixed(2)),
+    fuelAmount: Number(input.fuelAmount.toFixed(2)),
+    insuranceAmount: Number(input.insuranceAmount.toFixed(2)),
+    penaltiesAmount: Number(input.penaltiesAmount.toFixed(2)),
+    totalPrice: Number(input.totalPrice.toFixed(2)),
+    appliedRate: input.appliedRate,
+  };
+}
+
+function contractAuditSnapshot(input: Contract) {
+  return {
+    status: input.status,
+    customerName: input.customerName,
+    companyName: input.companyName,
+    deliveryAt: input.deliveryAt,
+    pickupAt: input.pickupAt,
+    branchCode: input.branchCode,
+    vehiclePlate: input.vehiclePlate,
+    billedCarGroup: input.billedCarGroup,
+    baseAmount: Number(input.baseAmount.toFixed(2)),
+    extrasAmount: Number(input.extrasAmount.toFixed(2)),
+    totalSettlement: Number(input.totalSettlement.toFixed(2)),
+    ivaPercent: Number(input.ivaPercent.toFixed(2)),
+    invoiceId: input.invoiceId ?? "",
+  };
 }
 
 function hasOverlap(aStart: string, aEnd: string, bStart: string, bEnd: string): boolean {
@@ -177,6 +373,199 @@ function hasOverlap(aStart: string, aEnd: string, bStart: string, bEnd: string):
     return false;
   }
   return a1 < b2 && b1 < a2;
+}
+
+function toDateKeyLocal(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function dateOnlyToDayNumber(value: string): number | null {
+  const raw = value.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return null;
+  const parsed = parseDateSafe(`${raw}T00:00:00`);
+  if (!parsed) return null;
+  return Math.floor(parsed.getTime() / (24 * 60 * 60 * 1000));
+}
+
+function computeBilledDaysBy24h(deliveryAt: string, pickupAt: string): number {
+  const delivery = parseDateSafe(deliveryAt);
+  const pickup = parseDateSafe(pickupAt);
+  if (!delivery || !pickup) return 1;
+  const diffMs = pickup.getTime() - delivery.getTime();
+  if (diffMs <= 0) return 1;
+  return Math.max(1, Math.ceil(diffMs / (24 * 60 * 60 * 1000)));
+}
+
+type TariffComputationResult = {
+  found: boolean;
+  amount: number;
+  bracketLabel: string;
+  usedPlanId: string;
+};
+
+function resolveTariffAmountForPlanDays(input: {
+  data: RentalData;
+  planId: string;
+  groupCode: string;
+  targetDays: number;
+}): TariffComputationResult {
+  const groupCode = input.groupCode.trim().toUpperCase();
+  const days = Math.max(1, Math.floor(input.targetDays));
+  const brackets = input.data.tariffBrackets
+    .filter((item) => item.tariffPlanId === input.planId)
+    .toSorted((a, b) => a.order - b.order);
+  if (brackets.length === 0) {
+    return { found: false, amount: 0, bracketLabel: "", usedPlanId: input.planId };
+  }
+
+  const exact = brackets.find((item) => days >= item.fromDay && days <= item.toDay);
+  if (exact) {
+    const priceRow = input.data.tariffPrices.find(
+      (item) =>
+        item.tariffPlanId === input.planId &&
+        item.bracketId === exact.id &&
+        item.groupCode.toUpperCase() === groupCode,
+    );
+    if (priceRow) {
+      return { found: true, amount: Number(priceRow.price.toFixed(2)), bracketLabel: exact.label, usedPlanId: input.planId };
+    }
+  }
+
+  const lower = brackets
+    .filter((item) => item.toDay < days)
+    .toSorted((a, b) => b.toDay - a.toDay)[0];
+  if (!lower) {
+    return { found: false, amount: 0, bracketLabel: "", usedPlanId: input.planId };
+  }
+  const lowerPrice = input.data.tariffPrices.find(
+    (item) =>
+      item.tariffPlanId === input.planId &&
+      item.bracketId === lower.id &&
+      item.groupCode.toUpperCase() === groupCode,
+  );
+  if (!lowerPrice || lower.toDay <= 0) {
+    return { found: false, amount: 0, bracketLabel: "", usedPlanId: input.planId };
+  }
+  const perDay = lowerPrice.price / lower.toDay;
+  return {
+    found: true,
+    amount: Number((perDay * days).toFixed(2)),
+    bracketLabel: `${lower.label} prorrateado`,
+    usedPlanId: input.planId,
+  };
+}
+
+function selectTariffPlanForDate(input: {
+  plans: TariffPlan[];
+  dateKey: string;
+  fallbackPlanId: string;
+}): TariffPlan | null {
+  const dayNumber = dateOnlyToDayNumber(input.dateKey);
+  if (dayNumber === null) {
+    return input.plans.find((plan) => plan.id === input.fallbackPlanId) ?? input.plans[0] ?? null;
+  }
+  const matching = input.plans.filter((plan) => {
+    const from = dateOnlyToDayNumber(plan.validFrom);
+    const to = dateOnlyToDayNumber(plan.validTo);
+    if (from !== null && dayNumber < from) return false;
+    if (to !== null && dayNumber > to) return false;
+    return true;
+  });
+  if (matching.length > 0) {
+    return matching.toSorted((a, b) => {
+      const aFrom = dateOnlyToDayNumber(a.validFrom) ?? Number.MIN_SAFE_INTEGER;
+      const bFrom = dateOnlyToDayNumber(b.validFrom) ?? Number.MIN_SAFE_INTEGER;
+      return aFrom - bFrom;
+    })[0];
+  }
+  return input.plans.find((plan) => plan.id === input.fallbackPlanId) ?? input.plans[0] ?? null;
+}
+
+function calculateTariffAmountFromPlans(input: {
+  data: RentalData;
+  plans: TariffPlan[];
+  groupCode: string;
+  billedDays: number;
+  deliveryAt?: string;
+  pickupAt?: string;
+  preferredPlanId?: string;
+}): TariffComputationResult {
+  const days = Math.max(1, Math.floor(input.billedDays));
+  if (input.plans.length === 0) {
+    return { found: false, amount: 0, bracketLabel: "", usedPlanId: "" };
+  }
+
+  const fallbackPlan =
+    (input.preferredPlanId ? input.plans.find((plan) => plan.id === input.preferredPlanId) : null) ??
+    input.plans.toSorted((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+  if (!fallbackPlan) {
+    return { found: false, amount: 0, bracketLabel: "", usedPlanId: "" };
+  }
+
+  const start = input.deliveryAt ? parseDateSafe(input.deliveryAt) : null;
+  const end = input.pickupAt ? parseDateSafe(input.pickupAt) : null;
+  const canSplitBySeason = Boolean(start && end && end.getTime() > start.getTime() && days > 1);
+
+  if (!canSplitBySeason) {
+    return resolveTariffAmountForPlanDays({
+      data: input.data,
+      planId: fallbackPlan.id,
+      groupCode: input.groupCode,
+      targetDays: days,
+    });
+  }
+
+  const countedDays = computeBilledDaysBy24h(input.deliveryAt ?? "", input.pickupAt ?? "");
+  const blocks = Math.max(days, countedDays);
+  const planDays = new Map<string, number>();
+  const ms24h = 24 * 60 * 60 * 1000;
+  for (let i = 0; i < blocks; i += 1) {
+    const dayStart = new Date(start!.getTime() + i * ms24h);
+    const dateKey = toDateKeyLocal(dayStart);
+    const planForDate = selectTariffPlanForDate({
+      plans: input.plans,
+      dateKey,
+      fallbackPlanId: fallbackPlan.id,
+    });
+    if (!planForDate) continue;
+    planDays.set(planForDate.id, (planDays.get(planForDate.id) ?? 0) + 1);
+  }
+  if (planDays.size <= 1) {
+    const onlyPlanId = planDays.keys().next().value as string | undefined;
+    return resolveTariffAmountForPlanDays({
+      data: input.data,
+      planId: onlyPlanId || fallbackPlan.id,
+      groupCode: input.groupCode,
+      targetDays: blocks,
+    });
+  }
+
+  const referenceDays = blocks < 7 ? 3 : 7;
+  let total = 0;
+  const labels: string[] = [];
+  for (const [planId, segmentDays] of planDays.entries()) {
+    const base = resolveTariffAmountForPlanDays({
+      data: input.data,
+      planId,
+      groupCode: input.groupCode,
+      targetDays: referenceDays,
+    });
+    if (!base.found || referenceDays <= 0) {
+      return { found: false, amount: 0, bracketLabel: "", usedPlanId: planId };
+    }
+    const prorated = Number(((base.amount / referenceDays) * segmentDays).toFixed(2));
+    total += prorated;
+    labels.push(`${base.bracketLabel} x${segmentDays}d`);
+  }
+  return {
+    found: true,
+    amount: Number(total.toFixed(2)),
+    bracketLabel: labels.join(" + "),
+    usedPlanId: fallbackPlan.id,
+  };
 }
 
 function normalizeGroupToken(value: string): string {
@@ -443,7 +832,7 @@ export async function listInvoices(query: string): Promise<Invoice[]> {
 
   return normalizedInvoices
     .filter((invoice) => {
-      return [invoice.invoiceNumber, invoice.invoiceName, invoice.contractId, invoice.issuedAt]
+      return [invoice.invoiceNumber, invoice.invoiceName, invoice.contractId ?? "", invoice.issuedAt, invoice.manualCustomerName]
         .join(" ")
         .toLowerCase()
         .includes(normalizedQuery);
@@ -466,6 +855,9 @@ export async function renameInvoice(invoiceId: string, invoiceName: string, acto
   const invoice = data.invoices.find((item) => item.id === invoiceId);
   if (!invoice) {
     throw new Error("Factura no encontrada");
+  }
+  if (invoice.status === "FINAL") {
+    throw new Error("Factura final: no se puede modificar");
   }
   const clean = invoiceName.trim();
   if (!clean) {
@@ -490,6 +882,9 @@ export async function changeInvoiceDate(invoiceId: string, issuedAt: string, act
   if (!invoice) {
     throw new Error("Factura no encontrada");
   }
+  if (invoice.status === "FINAL") {
+    throw new Error("Factura final: no se puede modificar");
+  }
   if (!parseDateSafe(issuedAt)) {
     throw new Error("Fecha de factura no válida");
   }
@@ -511,6 +906,9 @@ export async function deleteInvoice(invoiceId: string, actor: { id: string; role
   const invoice = data.invoices.find((item) => item.id === invoiceId);
   if (!invoice) {
     throw new Error("Factura no encontrada");
+  }
+  if (invoice.status === "FINAL") {
+    throw new Error("Factura final: no se puede borrar");
   }
   const linkedContract = data.contracts.find((item) => item.invoiceId === invoiceId);
   if (linkedContract) {
@@ -583,6 +981,176 @@ export async function getInvoiceById(invoiceId: string): Promise<Invoice | null>
     ...invoice,
     invoiceName: invoice.invoiceName || `Factura ${invoice.invoiceNumber}`,
   };
+}
+
+export async function createManualInvoice(input: Record<string, string>, actor: { id: string; role: RoleName }) {
+  const data = await readRentalData();
+  const issuedDate = (input.issuedDate ?? "").trim();
+  if (!parseDateSafe(`${issuedDate}T00:00:00`)) {
+    throw new Error("Fecha de factura no válida");
+  }
+  const branchCode = resolveBranchCodeFromInput(input.branchCode ?? "", data.companySettings.branches);
+  if (!branchCode || (branchCode === "SUC-ND" && data.companySettings.branches.length > 0)) {
+    throw new Error("Sucursal obligatoria");
+  }
+  const invoiceName = (input.invoiceName ?? "").trim();
+  if (!invoiceName) {
+    throw new Error("Concepto de factura obligatorio");
+  }
+  const receiverName = (input.manualCustomerName ?? "").trim();
+  if (!receiverName) {
+    throw new Error("Cliente/empresa receptor obligatorio");
+  }
+
+  const baseAmount = parseNumber(input.baseAmount ?? "0");
+  const extrasAmount = 0;
+  const insuranceAmount = 0;
+  const penaltiesAmount = 0;
+  const ivaPercent = parseNumber(input.ivaPercent ?? String(data.companySettings.defaultIvaPercent));
+  const subtotal = baseAmount + extrasAmount + insuranceAmount + penaltiesAmount;
+  const ivaAmount = (subtotal * ivaPercent) / 100;
+
+  const requestedTypeRaw = String(input.invoiceType ?? "F").trim().toUpperCase();
+  const requestedType = (["F", "V", "R", "A"] as const).includes(requestedTypeRaw as "F" | "V" | "R" | "A")
+    ? (requestedTypeRaw as "F" | "V" | "R" | "A")
+    : "F";
+  const invoiceSeriesByType = data.companySettings.invoiceSeriesByType ?? { F: "F", V: "V", R: "R", A: "A" };
+  const invoiceSeries = normalizeInvoiceSeries(invoiceSeriesByType[requestedType], requestedType);
+  const counterScope = data.companySettings.invoiceNumberScope === "GLOBAL" ? "GLOBAL" : "BRANCH";
+  const key = resolveInvoiceCounterKey({ scope: counterScope, branchCode, invoiceSeries });
+  let invoiceCounter = (data.counters.invoiceByYearBranch[key] ?? 0) + 1;
+  let invoiceNumberCandidate = buildInvoiceNumber(invoiceSeries, invoiceCounter);
+  while (data.invoices.some((item) => item.invoiceNumber === invoiceNumberCandidate)) {
+    invoiceCounter += 1;
+    invoiceNumberCandidate = buildInvoiceNumber(invoiceSeries, invoiceCounter);
+  }
+  data.counters.invoiceByYearBranch[key] = invoiceCounter;
+
+  const invoice: Invoice = {
+    id: crypto.randomUUID(),
+    invoiceNumber: invoiceNumberCandidate,
+    invoiceName,
+    sourceType: "MANUAL",
+    invoiceType: requestedType,
+    contractId: null,
+    sourceInvoiceId: null,
+    issuedAt: `${issuedDate}T00:00:00`,
+    baseAmount,
+    extrasAmount,
+    insuranceAmount,
+    penaltiesAmount,
+    ivaPercent,
+    ivaAmount,
+    totalAmount: subtotal + ivaAmount,
+    manualCustomerName: receiverName,
+    manualCustomerTaxId: (input.manualCustomerTaxId ?? "").trim(),
+    manualCustomerAddress: (input.manualCustomerAddress ?? "").trim(),
+    manualCustomerEmail: (input.manualCustomerEmail ?? "").trim(),
+    manualLanguage: ((input.manualLanguage ?? "es").trim() || "es").toLowerCase(),
+    status: "BORRADOR",
+    finalizedAt: null,
+    finalizedBy: "",
+    sentLog: [],
+  };
+
+  data.invoices.push(invoice);
+  await writeRentalData(data);
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "invoice_manual_create",
+    entityId: invoice.id,
+    details: { invoiceNumber: invoice.invoiceNumber, branchCode, totalAmount: invoice.totalAmount, invoiceType: requestedType, counterScope },
+  });
+  return invoice;
+}
+
+export async function finalizeInvoice(invoiceId: string, actor: { id: string; role: RoleName }) {
+  const data = await readRentalData();
+  const invoice = data.invoices.find((item) => item.id === invoiceId);
+  if (!invoice) {
+    throw new Error("Factura no encontrada");
+  }
+  if (invoice.status === "FINAL") {
+    return invoice;
+  }
+  invoice.status = "FINAL";
+  invoice.finalizedAt = new Date().toISOString();
+  invoice.finalizedBy = actor.id;
+  await writeRentalData(data);
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "invoice_finalize",
+    entityId: invoice.id,
+    details: { invoiceNumber: invoice.invoiceNumber },
+  });
+  return invoice;
+}
+
+export async function createDerivedInvoiceFromSource(
+  sourceInvoiceId: string,
+  input: { invoiceType: "R" | "A"; issuedDate?: string; invoiceName?: string },
+  actor: { id: string; role: RoleName },
+) {
+  const data = await readRentalData();
+  const source = data.invoices.find((item) => item.id === sourceInvoiceId);
+  if (!source) {
+    throw new Error("Factura origen no encontrada");
+  }
+  const derivedType = input.invoiceType;
+  const issuedAt = input.issuedDate && parseDateSafe(`${input.issuedDate}T00:00:00`)
+    ? `${input.issuedDate}T00:00:00`
+    : new Date().toISOString();
+
+  const branchCodeFromSource =
+    source.contractId
+      ? data.contracts.find((contract) => contract.id === source.contractId)?.branchCode ?? "SUC-ND"
+      : "SUC-ND";
+  const invoiceSeriesByType = data.companySettings.invoiceSeriesByType ?? { F: "F", V: "V", R: "R", A: "A" };
+  const invoiceSeries = normalizeInvoiceSeries(invoiceSeriesByType[derivedType], derivedType);
+  const counterScope = data.companySettings.invoiceNumberScope === "GLOBAL" ? "GLOBAL" : "BRANCH";
+  const key = resolveInvoiceCounterKey({ scope: counterScope, branchCode: branchCodeFromSource, invoiceSeries });
+  let invoiceCounter = (data.counters.invoiceByYearBranch[key] ?? 0) + 1;
+  let invoiceNumberCandidate = buildInvoiceNumber(invoiceSeries, invoiceCounter);
+  while (data.invoices.some((item) => item.invoiceNumber === invoiceNumberCandidate)) {
+    invoiceCounter += 1;
+    invoiceNumberCandidate = buildInvoiceNumber(invoiceSeries, invoiceCounter);
+  }
+  data.counters.invoiceByYearBranch[key] = invoiceCounter;
+
+  const invoice: Invoice = {
+    ...source,
+    id: crypto.randomUUID(),
+    invoiceNumber: invoiceNumberCandidate,
+    invoiceName:
+      (input.invoiceName ?? "").trim() ||
+      (derivedType === "R" ? `Rectificativa ${source.invoiceNumber}` : `Abono ${source.invoiceNumber}`),
+    invoiceType: derivedType,
+    sourceInvoiceId: source.id,
+    issuedAt,
+    status: "BORRADOR",
+    finalizedAt: null,
+    finalizedBy: "",
+    sentLog: [],
+  };
+
+  data.invoices.push(invoice);
+  await writeRentalData(data);
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "invoice_derived_create",
+    entityId: invoice.id,
+    details: { sourceInvoiceNumber: source.invoiceNumber, invoiceNumber: invoice.invoiceNumber, invoiceType: derivedType },
+  });
+  return invoice;
 }
 
 export async function listInvoiceSendLogs(input: { from: string; to: string }) {
@@ -671,6 +1239,7 @@ export async function updateCompanySettings(input: Record<string, string>, actor
   const data = await readRentalData();
   const has = (key: string) => Object.prototype.hasOwnProperty.call(input, key);
   const current = data.companySettings;
+  const nowIso = new Date().toISOString();
 
   const branches = has("branchesRaw")
     ? (input.branchesRaw ?? "")
@@ -702,6 +1271,16 @@ export async function updateCompanySettings(input: Record<string, string>, actor
     return /^#[0-9a-fA-F]{6}$/.test(cleaned) ? cleaned : fallback;
   };
   const nextCompanyName = has("companyName") ? ((input.companyName ?? "N/D").trim() || "N/D") : current.companyName;
+  const branchSchedules = has("branchSchedulesRaw")
+    ? (() => {
+        try {
+          const parsed = JSON.parse(input.branchSchedulesRaw ?? "{}") as unknown;
+          return normalizeBranchSchedules(parsed, current.branchSchedules ?? {}, nowIso, actor.id);
+        } catch {
+          return current.branchSchedules ?? {};
+        }
+      })()
+    : (current.branchSchedules ?? {});
 
   data.companySettings = {
     companyName: nextCompanyName,
@@ -715,6 +1294,13 @@ export async function updateCompanySettings(input: Record<string, string>, actor
     taxId: has("taxId") ? ((input.taxId ?? "N/D").trim() || "N/D") : current.taxId,
     fiscalAddress: has("fiscalAddress") ? ((input.fiscalAddress ?? "N/D").trim() || "N/D") : current.fiscalAddress,
     documentFooter: has("documentFooter") ? (input.documentFooter ?? "").trim() : (current.documentFooter ?? ""),
+    contractFrontFooter: has("contractFrontFooter")
+      ? (input.contractFrontFooter ?? "").trim()
+      : (current.contractFrontFooter ?? current.documentFooter ?? ""),
+    contractBackContent: has("contractBackContent") ? (input.contractBackContent ?? "").trim() : (current.contractBackContent ?? ""),
+    contractBackContentType: has("contractBackContentType")
+      ? ((input.contractBackContentType ?? "").trim().toUpperCase() === "HTML" ? "HTML" : "TEXT")
+      : (current.contractBackContentType ?? "TEXT"),
     logoDataUrl: has("logoDataUrl") ? (input.logoDataUrl ?? "").trim() : (current.logoDataUrl ?? ""),
     brandPrimaryColor: has("brandPrimaryColor")
       ? normalizeHex(input.brandPrimaryColor ?? "", "#2563eb")
@@ -736,10 +1322,16 @@ export async function updateCompanySettings(input: Record<string, string>, actor
       V: has("invoiceSeriesV") ? normalizeInvoiceSeries(input.invoiceSeriesV ?? current.invoiceSeriesByType.V, "V") : current.invoiceSeriesByType.V,
       A: has("invoiceSeriesA") ? normalizeInvoiceSeries(input.invoiceSeriesA ?? current.invoiceSeriesByType.A, "A") : current.invoiceSeriesByType.A,
     },
+    invoiceNumberScope:
+      has("invoiceNumberScope") && String(input.invoiceNumberScope ?? "").toUpperCase() === "GLOBAL" ? "GLOBAL" : "BRANCH",
     branches,
+    branchSchedules,
     contractNumberPattern: "aa-sucursal-numero",
-    invoiceNumberPattern: "aa-sucursal-numero",
-    updatedAt: new Date().toISOString(),
+    invoiceNumberPattern:
+      has("invoiceNumberScope") && String(input.invoiceNumberScope ?? "").toUpperCase() === "GLOBAL"
+        ? "serie-digitos-global"
+        : "serie-digitos-sucursal",
+    updatedAt: nowIso,
     updatedBy: actor.id,
   };
 
@@ -902,25 +1494,17 @@ export async function createReservation(input: Record<string, string>, actor: { 
   const billedDays = parseNumber(input.billedDays ?? "0");
   let baseAmount = parseNumber(input.baseAmount ?? "0");
   if (baseAmount <= 0 && appliedRate && billedCarGroup && billedDays > 0) {
-    const plan = data.tariffPlans.find((item) => item.code.toUpperCase() === appliedRate.toUpperCase());
-    if (plan) {
-      const brackets = data.tariffBrackets
-        .filter((item) => item.tariffPlanId === plan.id)
-        .toSorted((a, b) => a.order - b.order);
-      const bracket = brackets.find((item) => billedDays >= item.fromDay && billedDays <= item.toDay);
-      const extra = brackets.find((item) => item.isExtraDay);
-      const selected = bracket ?? extra ?? null;
-      if (selected) {
-        const priceRow = data.tariffPrices.find(
-          (item) =>
-            item.tariffPlanId === plan.id &&
-            item.bracketId === selected.id &&
-            item.groupCode.toUpperCase() === billedCarGroup.toUpperCase(),
-        );
-        if (priceRow) {
-          baseAmount = selected.isExtraDay ? priceRow.price * billedDays : priceRow.price;
-        }
-      }
+    const plansByCode = data.tariffPlans.filter((item) => item.code.toUpperCase() === appliedRate.toUpperCase());
+    const computed = calculateTariffAmountFromPlans({
+      data,
+      plans: plansByCode,
+      groupCode: billedCarGroup,
+      billedDays,
+      deliveryAt: input.deliveryAt?.trim() ?? "",
+      pickupAt: input.pickupAt?.trim() ?? "",
+    });
+    if (computed.found) {
+      baseAmount = computed.amount;
     }
   }
   const discountAmount = parseNumber(input.discountAmount ?? "0");
@@ -1120,7 +1704,18 @@ export async function createReservation(input: Record<string, string>, actor: { 
         to: toEmail,
         subject: `Confirmacion reserva ${reservation.reservationNumber}`,
         html: buildReservationConfirmationHtml(reservation, {
-          companyName: data.companySettings.companyName,
+          companyName: getDocumentCompanyName(data.companySettings),
+          taxId: data.companySettings.taxId,
+          fiscalAddress: data.companySettings.fiscalAddress,
+          logoDataUrl: data.companySettings.logoDataUrl,
+          companyEmailFrom: data.companySettings.companyEmailFrom,
+          companyPhone: data.companySettings.companyPhone,
+          companyWebsite: data.companySettings.companyWebsite,
+          companyFooter: data.companySettings.documentFooter,
+          brandPrimaryColor: data.companySettings.brandPrimaryColor,
+          brandSecondaryColor: data.companySettings.brandSecondaryColor,
+          customer: client ?? null,
+          language: client?.language || "es",
           templateHtml,
         }),
       });
@@ -1174,7 +1769,6 @@ export async function createReservation(input: Record<string, string>, actor: { 
       details: { reservationNumber, toEmail: reservation.confirmationSentLog[0].to, mode: "auto_on_create" },
     });
   }
-
 }
 
 export async function updateReservation(
@@ -1187,6 +1781,7 @@ export async function updateReservation(
   if (!reservation) {
     throw new Error("Reserva no encontrada");
   }
+  const before = reservationAuditSnapshot(reservation);
 
   reservation.customerName = (input.customerName ?? reservation.customerName).trim();
   reservation.branchDelivery = (input.branchDelivery ?? reservation.branchDelivery).trim();
@@ -1268,7 +1863,11 @@ export async function updateReservation(
     actorRole: actor.role,
     entity: "reservation_update",
     entityId: reservation.id,
-    details: { reservationNumber: reservation.reservationNumber },
+    details: {
+      reservationNumber: reservation.reservationNumber,
+      before,
+      after: reservationAuditSnapshot(reservation),
+    },
   });
 }
 
@@ -1304,6 +1903,7 @@ export async function assignPlateToReservation(
   if (!reservation) {
     throw new Error("Reserva no encontrada");
   }
+  const before = reservationAuditSnapshot(reservation);
 
   const plate = (input.assignedPlate ?? "").trim().toUpperCase();
   if (!plate) {
@@ -1392,8 +1992,62 @@ export async function assignPlateToReservation(
       groupOverrideReason,
       applyPriceAdjustment,
       priceAdjustmentAmount,
+      before,
+      after: reservationAuditSnapshot(reservation),
     },
   });
+}
+
+export async function reassignReservationFromPlanning(
+  input: {
+    reservationId: string;
+    targetPlate: string;
+    sourceStatus: "PETICION" | "RESERVA_CONFIRMADA" | "RESERVA_HUERFANA" | "CONTRATADO" | "BLOQUEADO" | "NO_DISPONIBLE" | "";
+    sourceGroup: string;
+    targetGroup: string;
+  },
+  actor: { id: string; role: RoleName },
+) {
+  const reservationId = input.reservationId.trim();
+  const targetPlate = input.targetPlate.trim().toUpperCase();
+  if (!reservationId || !targetPlate) {
+    throw new Error("Faltan datos para reasignar");
+  }
+  if (!["PETICION", "RESERVA_CONFIRMADA", "RESERVA_HUERFANA"].includes(input.sourceStatus)) {
+    throw new Error("Solo se pueden mover peticiones, reservas y huérfanas");
+  }
+
+  const data = await readRentalData();
+  const reservation = data.reservations.find((item) => item.id === reservationId);
+  if (!reservation) {
+    throw new Error("Reserva no encontrada");
+  }
+  if (reservation.contractId) {
+    throw new Error("No se puede mover una reserva con contrato");
+  }
+  if (reservation.assignedPlate.trim().toUpperCase() === targetPlate) {
+    return { changed: false, crossGroup: false };
+  }
+
+  const payload: Record<string, string> = {
+    assignedPlate: targetPlate,
+  };
+  const sourceGroup = input.sourceGroup.trim().toUpperCase();
+  const targetGroup = input.targetGroup.trim().toUpperCase();
+  const crossGroup = Boolean(sourceGroup && targetGroup && sourceGroup !== targetGroup);
+  if (crossGroup) {
+    payload.groupOverrideAccepted = "true";
+    payload.groupOverrideReason = "Reasignación desde planning (drag&drop)";
+  }
+
+  await assignPlateToReservation(reservationId, payload, actor);
+
+  return {
+    changed: true,
+    crossGroup,
+    sourceGroup,
+    targetGroup,
+  };
 }
 
 export async function createVehicleBlock(input: Record<string, string>, actor: { id: string; role: RoleName }) {
@@ -1529,7 +2183,7 @@ export async function convertReservationToContract(
   }
 
   // Numeración secuencial por año+sucursal para trazabilidad contable.
-  const branch = normalizeBranchCode(reservation.branchDelivery);
+  const branch = resolveBranchCodeFromInput(reservation.branchDelivery, data.companySettings.branches);
   const year = getYear(reservation.deliveryAt);
   const yearShort = getYearShort(reservation.deliveryAt);
   const key = `${year}-${branch}`;
@@ -1571,12 +2225,18 @@ export async function convertReservationToContract(
     checkOutFuelLevel: "",
     checkOutNotes: "",
     checkOutPhotos: "",
+    checkOutSignatureName: "",
+    checkOutSignatureHash: "",
+    checkOutSignatureDevice: "",
     checkInAt: null,
     checkInBy: "",
     checkInKm: 0,
     checkInFuelLevel: "",
     checkInNotes: "",
     checkInPhotos: "",
+    checkInSignatureName: "",
+    checkInSignatureHash: "",
+    checkInSignatureDevice: "",
     createdAt: new Date().toISOString(),
     createdBy: actor.id,
     closedAt: null,
@@ -1678,8 +2338,9 @@ export async function renumberContract(
   if (contract.status === "CERRADO") {
     throw new Error("No se puede renumerar un contrato cerrado");
   }
+  const before = contractAuditSnapshot(contract);
 
-  const nextBranch = normalizeBranchCode(input.branchCode ?? "");
+  const nextBranch = resolveBranchCodeFromInput(input.branchCode ?? "", data.companySettings.branches);
   if (!nextBranch || nextBranch === "SUC-ND") {
     throw new Error("Sucursal destino obligatoria");
   }
@@ -1713,6 +2374,8 @@ export async function renumberContract(
       previousBranchCode,
       nextBranchCode: nextBranch,
       reason: (input.reason ?? "").trim(),
+      before,
+      after: contractAuditSnapshot(contract),
     },
   });
 
@@ -1731,14 +2394,58 @@ function resolveReservationConfirmationTemplateHtml(
   );
 }
 
-function renderSimpleTemplate(template: string, data: Record<string, string>) {
-  return template.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_full, key: string) => data[key] ?? "");
+function ensureReservationBaseTemplates(data: RentalData) {
+  const nowIso = new Date().toISOString();
+  let changed = false;
+  const definitions = [
+    { code: "CONF_RES_ES_BASE", language: "es", title: "Confirmación reserva base ES", templateType: "CONFIRMACION_RESERVA" },
+    { code: "CONF_RES_EN_BASE", language: "en", title: "Reservation confirmation base EN", templateType: "CONFIRMACION_RESERVA" },
+    { code: "FAC_BASE_ES", language: "es", title: "Factura base ES", templateType: "FACTURA" },
+    { code: "FAC_BASE_EN", language: "en", title: "Invoice base EN", templateType: "FACTURA" },
+  ] as const;
+
+  for (const item of definitions) {
+    const exists = data.templates.find(
+      (template) => template.templateType === item.templateType && template.language === item.language,
+    );
+    if (exists) continue;
+    data.templates.push({
+      id: crypto.randomUUID(),
+      templateCode: item.code,
+      templateType: item.templateType,
+      language: item.language,
+      title: item.title,
+      htmlContent: getTemplatePresetHtml(item.templateType, item.language),
+      active: item.language === "es" && item.templateType === "CONFIRMACION_RESERVA",
+      createdAt: nowIso,
+      createdBy: "system",
+      updatedAt: nowIso,
+      updatedBy: "system",
+    });
+    changed = true;
+  }
+  return changed;
 }
 
 function buildReservationConfirmationHtml(
   reservation: Reservation,
-  input?: { companyName?: string; templateHtml?: string; taxId?: string; fiscalAddress?: string; logoDataUrl?: string },
+  input?: {
+    companyName?: string;
+    templateHtml?: string;
+    taxId?: string;
+    fiscalAddress?: string;
+    logoDataUrl?: string;
+    companyEmailFrom?: string;
+    companyPhone?: string;
+    companyWebsite?: string;
+    companyFooter?: string;
+    brandPrimaryColor?: string;
+    brandSecondaryColor?: string;
+    customer?: Client | null;
+    language?: string;
+  },
 ): string {
+  const language = (input?.language || input?.customer?.language || "es").toLowerCase();
   const fallback = `
     <html>
       <body style="font-family:Segoe UI, Arial, sans-serif; color:#111827;">
@@ -1752,26 +2459,27 @@ function buildReservationConfirmationHtml(
       </body>
     </html>
   `;
-  if (!input?.templateHtml) {
-    return fallback;
-  }
-  return renderSimpleTemplate(input.templateHtml, {
-    company_name: input.companyName || "N/D",
-    company_document_name: input.companyName || "N/D",
-    company_tax_id: input.taxId || "N/D",
-    company_fiscal_address: input.fiscalAddress || "N/D",
-    company_logo_data_url: input.logoDataUrl || "",
-    reservation_number: reservation.reservationNumber,
-    customer_name: reservation.customerName || "N/D",
-    delivery_at: reservation.deliveryAt || "N/D",
-    delivery_place: reservation.deliveryPlace || "N/D",
-    pickup_at: reservation.pickupAt || "N/D",
-    pickup_place: reservation.pickupPlace || "N/D",
-    billed_car_group: reservation.billedCarGroup || "N/D",
-    assigned_plate: reservation.assignedPlate || "N/D",
-    total_amount: reservation.totalPrice.toFixed(2),
-    sales_channel: reservation.salesChannel || "N/D",
-  });
+  const template = input?.templateHtml || getReservationBaseTemplate(language) || fallback;
+  return renderTemplateWithMacros(
+    template,
+    buildReservationTemplateData({
+      language,
+      reservation,
+      customer: input?.customer ?? null,
+      company: {
+        name: input?.companyName || "N/D",
+        taxId: input?.taxId || "N/D",
+        fiscalAddress: input?.fiscalAddress || "N/D",
+        emailFrom: input?.companyEmailFrom || "",
+        phone: input?.companyPhone || "",
+        website: input?.companyWebsite || "",
+        footer: input?.companyFooter || "",
+        logoDataUrl: input?.logoDataUrl || "",
+        brandPrimaryColor: input?.brandPrimaryColor || "#2563eb",
+        brandSecondaryColor: input?.brandSecondaryColor || "#0f172a",
+      },
+    }),
+  );
 }
 
 export async function sendReservationConfirmation(
@@ -1804,6 +2512,14 @@ export async function sendReservationConfirmation(
         taxId: data.companySettings.taxId,
         fiscalAddress: data.companySettings.fiscalAddress,
         logoDataUrl: data.companySettings.logoDataUrl,
+        companyEmailFrom: data.companySettings.companyEmailFrom,
+        companyPhone: data.companySettings.companyPhone,
+        companyWebsite: data.companySettings.companyWebsite,
+        companyFooter: data.companySettings.documentFooter,
+        brandPrimaryColor: data.companySettings.brandPrimaryColor,
+        brandSecondaryColor: data.companySettings.brandSecondaryColor,
+        customer: customer ?? null,
+        language: customer?.language || "es",
         templateHtml,
       }),
     });
@@ -1926,6 +2642,22 @@ export async function registerContractCheckOut(
   contract.checkOutFuelLevel = (input.fuelLevel ?? "").trim();
   contract.checkOutNotes = (input.notes ?? "").trim();
   contract.checkOutPhotos = (input.photos ?? "").trim();
+  const checkOutSigner = (input.signerName ?? "").trim();
+  if (!checkOutSigner) {
+    throw new Error("Nombre firmante obligatorio en checkout");
+  }
+  contract.checkOutSignatureName = checkOutSigner;
+  contract.checkOutSignatureDevice = (input.signatureDevice ?? "").trim() || "WEB";
+  contract.checkOutSignatureHash = createSignatureEvidenceHash({
+    contractId: contract.id,
+    phase: "CHECKOUT",
+    signerName: checkOutSigner,
+    signerId: actor.id,
+    notes: contract.checkOutNotes,
+    km: contract.checkOutKm,
+    fuelLevel: contract.checkOutFuelLevel,
+    signedAtIso: contract.checkOutAt || new Date().toISOString(),
+  });
   await writeRentalData(data);
   await appendAuditEvent({
     timestamp: new Date().toISOString(),
@@ -1938,6 +2670,7 @@ export async function registerContractCheckOut(
       contractNumber: contract.contractNumber,
       km: contract.checkOutKm,
       fuelLevel: contract.checkOutFuelLevel,
+      signatureHash: contract.checkOutSignatureHash,
     },
   });
 }
@@ -1961,6 +2694,22 @@ export async function registerContractCheckIn(
   contract.checkInFuelLevel = (input.fuelLevel ?? "").trim();
   contract.checkInNotes = (input.notes ?? "").trim();
   contract.checkInPhotos = (input.photos ?? "").trim();
+  const checkInSigner = (input.signerName ?? "").trim();
+  if (!checkInSigner) {
+    throw new Error("Nombre firmante obligatorio en checkin");
+  }
+  contract.checkInSignatureName = checkInSigner;
+  contract.checkInSignatureDevice = (input.signatureDevice ?? "").trim() || "WEB";
+  contract.checkInSignatureHash = createSignatureEvidenceHash({
+    contractId: contract.id,
+    phase: "CHECKIN",
+    signerName: checkInSigner,
+    signerId: actor.id,
+    notes: contract.checkInNotes,
+    km: contract.checkInKm,
+    fuelLevel: contract.checkInFuelLevel,
+    signedAtIso: contract.checkInAt || new Date().toISOString(),
+  });
   await writeRentalData(data);
   await appendAuditEvent({
     timestamp: new Date().toISOString(),
@@ -1973,6 +2722,7 @@ export async function registerContractCheckIn(
       contractNumber: contract.contractNumber,
       km: contract.checkInKm,
       fuelLevel: contract.checkInFuelLevel,
+      signatureHash: contract.checkInSignatureHash,
     },
   });
 }
@@ -1990,6 +2740,7 @@ export async function changeContractVehicle(
   if (contract.status === "CERRADO") {
     throw new Error("No se puede cambiar vehículo en contrato cerrado");
   }
+  const before = contractAuditSnapshot(contract);
 
   const nextPlate = (input.vehiclePlate ?? "").trim().toUpperCase();
   if (!nextPlate) {
@@ -2067,6 +2818,8 @@ export async function changeContractVehicle(
         reservations: conflictsByReservation.map((item) => item.reservationNumber),
         blocks: conflictsByBlock.map((item) => item.id),
       },
+      before,
+      after: contractAuditSnapshot(contract),
     },
   });
 }
@@ -2483,7 +3236,7 @@ export async function validateDataIntegrity() {
   }
 
   for (const invoice of data.invoices) {
-    if (!contractIds.has(invoice.contractId)) {
+    if (invoice.contractId && !contractIds.has(invoice.contractId)) {
       issues.push({
         code: "INVOICE_CONTRACT_NOT_FOUND",
         entity: "invoice",
@@ -2657,6 +3410,7 @@ export async function closeContract(contractId: string, actor: { id: string; rol
   if (contract.status === "CERRADO") {
     throw new Error("Contrato ya cerrado");
   }
+  const before = contractAuditSnapshot(contract);
 
   // El cierre de contrato genera factura automáticamente y la vincula.
   const ivaPercent = contract.ivaPercent || data.companySettings.defaultIvaPercent;
@@ -2667,18 +3421,29 @@ export async function closeContract(contractId: string, actor: { id: string; rol
   const subtotal = baseAmount + extrasAmount + insuranceAmount + penaltiesAmount;
   const ivaAmount = (subtotal * ivaPercent) / 100;
 
-  const year = getYear(contract.deliveryAt);
-  const yearShort = getYearShort(contract.deliveryAt);
-  const key = `${year}-${contract.branchCode}`;
-  const invoiceCounter = (data.counters.invoiceByYearBranch[key] ?? 0) + 1;
-  data.counters.invoiceByYearBranch[key] = invoiceCounter;
+  const counterScope = data.companySettings.invoiceNumberScope === "GLOBAL" ? "GLOBAL" : "BRANCH";
   const invoiceSeries = normalizeInvoiceSeries(data.companySettings.invoiceSeriesByType.F, "F");
+  const key = resolveInvoiceCounterKey({
+    scope: counterScope,
+    branchCode: contract.branchCode,
+    invoiceSeries,
+  });
+  let invoiceCounter = (data.counters.invoiceByYearBranch[key] ?? 0) + 1;
+  let invoiceNumberCandidate = buildInvoiceNumber(invoiceSeries, invoiceCounter);
+  while (data.invoices.some((item) => item.invoiceNumber === invoiceNumberCandidate)) {
+    invoiceCounter += 1;
+    invoiceNumberCandidate = buildInvoiceNumber(invoiceSeries, invoiceCounter);
+  }
+  data.counters.invoiceByYearBranch[key] = invoiceCounter;
 
   const invoice: Invoice = {
     id: crypto.randomUUID(),
-    invoiceNumber: buildInvoiceNumber(invoiceSeries, yearShort, contract.branchCode, invoiceCounter),
+    invoiceNumber: invoiceNumberCandidate,
     invoiceName: `Factura ${contract.contractNumber}`,
+    sourceType: "CONTRATO",
+    invoiceType: "F",
     contractId: contract.id,
+    sourceInvoiceId: null,
     issuedAt: new Date().toISOString(),
     baseAmount,
     extrasAmount,
@@ -2687,6 +3452,14 @@ export async function closeContract(contractId: string, actor: { id: string; rol
     ivaPercent,
     ivaAmount,
     totalAmount: subtotal + ivaAmount,
+    manualCustomerName: "",
+    manualCustomerTaxId: "",
+    manualCustomerAddress: "",
+    manualCustomerEmail: "",
+    manualLanguage: "",
+    status: "FINAL",
+    finalizedAt: new Date().toISOString(),
+    finalizedBy: actor.id,
     sentLog: [],
   };
 
@@ -2709,6 +3482,8 @@ export async function closeContract(contractId: string, actor: { id: string; rol
       invoiceNumber: invoice.invoiceNumber,
       cashAmount: contract.cashRecord.amount,
       totalSettlement: contract.totalSettlement,
+      before,
+      after: contractAuditSnapshot(contract),
     },
   });
   await appendAuditEvent({
@@ -2731,6 +3506,7 @@ export async function updateContract(contractId: string, input: Record<string, s
   if (contract.status === "CERRADO") {
     throw new Error("No se puede editar contrato cerrado");
   }
+  const before = contractAuditSnapshot(contract);
   contract.customerName = (input.customerName ?? contract.customerName).trim();
   contract.companyName = (input.companyName ?? contract.companyName).trim();
   contract.deliveryAt = (input.deliveryAt ?? contract.deliveryAt).trim();
@@ -2747,7 +3523,11 @@ export async function updateContract(contractId: string, input: Record<string, s
     actorRole: actor.role,
     entity: "contract_update",
     entityId: contract.id,
-    details: { contractNumber: contract.contractNumber },
+    details: {
+      contractNumber: contract.contractNumber,
+      before,
+      after: contractAuditSnapshot(contract),
+    },
   });
 }
 
@@ -2878,6 +3658,7 @@ type PlanningItem = {
   status: "PETICION" | "RESERVA_CONFIRMADA" | "CONTRATADO" | "RESERVA_HUERFANA" | "NO_DISPONIBLE" | "BLOQUEADO";
   overlap: boolean;
   referenceId: string;
+  contractId: string | null;
 };
 
 export async function listPlanning(input: {
@@ -2886,6 +3667,7 @@ export async function listPlanning(input: {
   plateFilter: string;
   groupFilter: string;
   modelFilter: string;
+  branchFilter?: string;
 }) {
   const data = await readRentalData();
   const from = parseDateSafe(`${input.startDate}T00:00:00`);
@@ -2900,12 +3682,16 @@ export async function listPlanning(input: {
   const plateFilter = input.plateFilter.trim().toUpperCase();
   const groupFilter = input.groupFilter.trim().toUpperCase();
   const modelFilter = input.modelFilter.trim().toUpperCase();
+  const branchFilter = (input.branchFilter ?? "").trim().toUpperCase();
 
   const planningItems: PlanningItem[] = [];
 
   // Construcción de items unificados de reservas y bloqueos.
   for (const reservation of data.reservations) {
     if (!hasOverlap(reservation.deliveryAt, reservation.pickupAt, periodStart, periodEnd)) {
+      continue;
+    }
+    if (branchFilter && !reservation.branchDelivery.toUpperCase().includes(branchFilter)) {
       continue;
     }
     const assignedPlate = reservation.assignedPlate.toUpperCase();
@@ -2948,6 +3734,7 @@ export async function listPlanning(input: {
           : "RESERVA_CONFIRMADA",
       overlap: false,
       referenceId: reservation.id,
+      contractId: reservation.contractId || null,
     });
   }
 
@@ -2981,6 +3768,7 @@ export async function listPlanning(input: {
       status: "BLOQUEADO",
       overlap: false,
       referenceId: block.id,
+      contractId: null,
     });
   }
 
@@ -4144,9 +4932,15 @@ export async function createTariffPlan(input: Record<string, string>, actor: { i
   if (!code || !title) {
     throw new Error("Código y título de tarifa son obligatorios");
   }
-  const duplicated = data.tariffPlans.find((item) => item.code === code);
+  const duplicated = data.tariffPlans.find(
+    (item) =>
+      item.code === code &&
+      (item.season ?? "").trim().toUpperCase() === (input.season ?? "").trim().toUpperCase() &&
+      (item.validFrom ?? "").trim() === (input.validFrom ?? "").trim() &&
+      (item.validTo ?? "").trim() === (input.validTo ?? "").trim(),
+  );
   if (duplicated) {
-    throw new Error("Ya existe una tarifa con ese código");
+    throw new Error("Ya existe una tarifa con ese código y periodo");
   }
   const plan: TariffPlan = {
     id: crypto.randomUUID(),
@@ -4373,42 +5167,37 @@ export async function calculateTariffQuote(input: {
   tariffPlanId: string;
   groupCode: string;
   billedDays: number;
+  deliveryAt?: string;
+  pickupAt?: string;
 }): Promise<{ found: boolean; amount: number; bracketLabel: string }> {
   const data = await readRentalData();
-  const brackets = data.tariffBrackets
-    .filter((item) => item.tariffPlanId === input.tariffPlanId)
-    .toSorted((a, b) => a.order - b.order);
-  const selected = brackets.find((item) => input.billedDays >= item.fromDay && input.billedDays <= item.toDay);
-  if (!selected) {
-    const extra = brackets.find((item) => item.isExtraDay);
-    if (!extra) {
-      return { found: false, amount: 0, bracketLabel: "" };
-    }
-    const priceRow = data.tariffPrices.find(
-      (item) =>
-        item.tariffPlanId === input.tariffPlanId &&
-        item.bracketId === extra.id &&
-        item.groupCode.toUpperCase() === input.groupCode.toUpperCase(),
-    );
-    const amount = (priceRow?.price ?? 0) * input.billedDays;
-    return { found: Boolean(priceRow), amount, bracketLabel: extra.label };
+  const targetPlan = data.tariffPlans.find((item) => item.id === input.tariffPlanId);
+  if (!targetPlan) {
+    return { found: false, amount: 0, bracketLabel: "" };
   }
-  const priceRow = data.tariffPrices.find(
-    (item) =>
-      item.tariffPlanId === input.tariffPlanId &&
-      item.bracketId === selected.id &&
-      item.groupCode.toUpperCase() === input.groupCode.toUpperCase(),
-  );
+  const plansByCode = data.tariffPlans.filter((item) => item.code.toUpperCase() === targetPlan.code.toUpperCase());
+  const result = calculateTariffAmountFromPlans({
+    data,
+    plans: plansByCode,
+    groupCode: input.groupCode,
+    billedDays: input.billedDays,
+    deliveryAt: input.deliveryAt,
+    pickupAt: input.pickupAt,
+    preferredPlanId: targetPlan.id,
+  });
   return {
-    found: Boolean(priceRow),
-    amount: priceRow?.price ?? 0,
-    bracketLabel: selected.label,
+    found: result.found,
+    amount: result.amount,
+    bracketLabel: result.bracketLabel,
   };
 }
 
 // -------------------- Plantillas documentales --------------------
 export async function listTemplates(query: string) {
   const data = await readRentalData();
+  if (ensureReservationBaseTemplates(data)) {
+    await writeRentalData(data);
+  }
   const q = query.trim().toLowerCase();
   return data.templates
     .filter((item) => {
@@ -4538,5 +5327,444 @@ function parseDailyExpenseMeta(note: string): { batchId: string; workerName: str
   return {
     batchId: batchMatch?.[1]?.trim() || "",
     workerName: workerMatch?.[1]?.trim() || "",
+  };
+}
+
+function normalizeCsvHeader(input: string): string {
+  return input
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function parseCsvLine(line: string, delimiter: string): string[] {
+  const cells: string[] = [];
+  let current = "";
+  let insideQuotes = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const char = line[i];
+    if (char === '"') {
+      if (insideQuotes && line[i + 1] === '"') {
+        current += '"';
+        i += 1;
+        continue;
+      }
+      insideQuotes = !insideQuotes;
+      continue;
+    }
+    if (char === delimiter && !insideQuotes) {
+      cells.push(current.trim());
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  cells.push(current.trim());
+  return cells.map((cell) => cell.replace(/^"|"$/g, "").trim());
+}
+
+function parseCsvRecords(csvRaw: string): Array<Record<string, string>> {
+  const text = csvRaw.replace(/\r/g, "").trim();
+  if (!text) return [];
+  const lines = text.split("\n").filter((line) => line.trim());
+  if (lines.length < 2) return [];
+  const headerLine = lines[0];
+  const commaCount = (headerLine.match(/,/g) ?? []).length;
+  const semicolonCount = (headerLine.match(/;/g) ?? []).length;
+  const delimiter = semicolonCount > commaCount ? ";" : ",";
+  const headers = parseCsvLine(headerLine, delimiter).map((item) => normalizeCsvHeader(item));
+  const rows: Array<Record<string, string>> = [];
+  for (let i = 1; i < lines.length; i += 1) {
+    const cells = parseCsvLine(lines[i], delimiter);
+    const row: Record<string, string> = {};
+    headers.forEach((header, idx) => {
+      if (!header) return;
+      row[header] = (cells[idx] ?? "").trim();
+    });
+    const hasAnyData = Object.values(row).some((value) => value !== "");
+    if (hasAnyData) rows.push(row);
+  }
+  return rows;
+}
+
+function getRowValue(row: Record<string, string>, keys: string[]): string {
+  for (const key of keys) {
+    const normalized = normalizeCsvHeader(key);
+    const value = row[normalized];
+    if (value && value.trim()) return value.trim();
+  }
+  return "";
+}
+
+export async function importClientsFromCsv(csvRaw: string, actor: { id: string; role: RoleName }) {
+  const rows = parseCsvRecords(csvRaw);
+  if (rows.length === 0) {
+    return { rows: 0, created: 0, reused: 0 };
+  }
+
+  const existing = await readRentalData();
+  const seenDocument = new Set(existing.clients.map((item) => item.documentNumber.trim().toLowerCase()).filter(Boolean));
+  const seenLicense = new Set(existing.clients.map((item) => item.licenseNumber.trim().toLowerCase()).filter(Boolean));
+  let created = 0;
+  let reused = 0;
+
+  for (let idx = 0; idx < rows.length; idx += 1) {
+    const row = rows[idx];
+    const sourceDoc = getRowValue(row, ["documentNumber", "dni", "documento", "doc"]);
+    const sourceLicense = getRowValue(row, ["licenseNumber", "permiso", "carnet", "licencia"]);
+    const docKey = sourceDoc.toLowerCase();
+    const licenseKey = sourceLicense.toLowerCase();
+    const alreadyKnown = Boolean((docKey && seenDocument.has(docKey)) || (licenseKey && seenLicense.has(licenseKey)));
+
+    const companyName = getRowValue(row, ["companyName", "empresa", "razonSocial", "razon_social", "nombreEmpresa"]);
+    const clientTypeRaw = getRowValue(row, ["clientType", "tipo", "tipoCliente", "tipo_cliente"]).toUpperCase();
+    const clientType =
+      (["PARTICULAR", "EMPRESA", "COMISIONISTA"] as const).includes(
+        clientTypeRaw as "PARTICULAR" | "EMPRESA" | "COMISIONISTA",
+      )
+        ? (clientTypeRaw as "PARTICULAR" | "EMPRESA" | "COMISIONISTA")
+        : companyName
+          ? "EMPRESA"
+          : "PARTICULAR";
+
+    const importId = String(idx + 1);
+    const firstName = getRowValue(row, ["firstName", "nombre", "nombreCliente", "nombre_cliente"]) || "N/D";
+    const lastName = getRowValue(row, ["lastName", "apellidos", "apellido"]) || "N/D";
+    const email = getRowValue(row, ["email", "correo", "mail"]) || `cliente${importId}@import.local`;
+    const documentNumber = sourceDoc || `DOC-IMPORT-${importId}`;
+    const licenseNumber = sourceLicense || `LIC-IMPORT-${importId}`;
+    const residenceStreet = getRowValue(row, ["residenceStreet", "direccion", "direccionResidencia"]) || "N/D";
+    const residenceCity = getRowValue(row, ["residenceCity", "ciudad", "municipio"]) || "N/D";
+    const residenceCountry = getRowValue(row, ["residenceCountry", "pais"]) || "ES";
+    const vacationStreet = getRowValue(row, ["vacationStreet", "direccionVacaciones"]) || residenceStreet;
+    const vacationCity = getRowValue(row, ["vacationCity", "ciudadVacaciones"]) || residenceCity;
+    const vacationCountry = getRowValue(row, ["vacationCountry", "paisVacaciones"]) || residenceCountry;
+    const companyTaxId = getRowValue(row, ["taxId", "cif", "nif", "vat"]) || `TAX-IMPORT-${importId}`;
+    const fiscalAddress = getRowValue(row, ["fiscalAddress", "direccionFiscal"]) || "N/D";
+
+    await createClient(
+      {
+        allowDuplicateLoad: "true",
+        clientType,
+        firstName,
+        lastName,
+        companyName: companyName || `${firstName} ${lastName}`.trim(),
+        nationality: getRowValue(row, ["nationality", "nacionalidad"]) || "ES",
+        language: getRowValue(row, ["language", "idioma"]) || "es",
+        documentType: getRowValue(row, ["documentType", "tipoDocumento"]) || "DNI",
+        documentNumber,
+        licenseNumber,
+        email,
+        phone1: getRowValue(row, ["phone1", "telefono", "movil"]) || "000000000",
+        birthDate: getRowValue(row, ["birthDate", "fechaNacimiento"]) || "1970-01-01",
+        birthPlace: getRowValue(row, ["birthPlace", "lugarNacimiento"]) || "N/D",
+        residenceStreet,
+        residenceCity,
+        residenceCountry,
+        vacationStreet,
+        vacationCity,
+        vacationCountry,
+        taxId: companyTaxId,
+        fiscalAddress,
+      },
+      actor,
+    );
+
+    if (alreadyKnown) {
+      reused += 1;
+    } else {
+      created += 1;
+      if (docKey) seenDocument.add(docKey);
+      if (licenseKey) seenLicense.add(licenseKey);
+    }
+  }
+
+  return { rows: rows.length, created, reused };
+}
+
+export async function importTariffCatalogFromCsv(csvRaw: string, actor: { id: string; role: RoleName }) {
+  const rows = parseCsvRecords(csvRaw);
+  if (rows.length === 0) {
+    return {
+      rows: 0,
+      plansCreated: 0,
+      plansUpdated: 0,
+      bracketsCreated: 0,
+      bracketsUpdated: 0,
+      pricesCreated: 0,
+      pricesUpdated: 0,
+    };
+  }
+
+  const data = await readRentalData();
+  const now = new Date().toISOString();
+  let plansCreated = 0;
+  let bracketsCreated = 0;
+  let pricesCreated = 0;
+  const touchedPlans = new Set<string>();
+  const touchedBrackets = new Set<string>();
+  const touchedPrices = new Set<string>();
+
+  for (const row of rows) {
+    const code = (getRowValue(row, ["tariffCode", "planCode", "codigoTarifa", "codigo"]) || "").toUpperCase();
+    const title = getRowValue(row, ["tariffTitle", "planTitle", "nombreTarifa", "titulo"]);
+    if (!code || !title) continue;
+
+    let plan = data.tariffPlans.find((item) => item.code === code);
+    if (!plan) {
+      plan = {
+        id: crypto.randomUUID(),
+        code,
+        title,
+        season: getRowValue(row, ["season", "temporada"]),
+        validFrom: getRowValue(row, ["validFrom", "desde"]),
+        validTo: getRowValue(row, ["validTo", "hasta"]),
+        priceMode:
+          getRowValue(row, ["priceMode", "modoPrecio"]) === "PRECIO_B"
+            ? "PRECIO_B"
+            : getRowValue(row, ["priceMode", "modoPrecio"]) === "PRECIO_C"
+              ? "PRECIO_C"
+              : "PRECIO_A",
+        active: getRowValue(row, ["active", "activa"]) === "false" ? false : true,
+        notes: getRowValue(row, ["notes", "notas"]),
+        createdAt: now,
+        createdBy: actor.id,
+        updatedAt: now,
+        updatedBy: actor.id,
+      };
+      data.tariffPlans.push(plan);
+      plansCreated += 1;
+    } else {
+      if (!touchedPlans.has(plan.id)) {
+        touchedPlans.add(plan.id);
+      }
+      plan.title = title || plan.title;
+      plan.season = getRowValue(row, ["season", "temporada"]) || plan.season;
+      plan.validFrom = getRowValue(row, ["validFrom", "desde"]) || plan.validFrom;
+      plan.validTo = getRowValue(row, ["validTo", "hasta"]) || plan.validTo;
+      plan.updatedAt = now;
+      plan.updatedBy = actor.id;
+    }
+
+    const bracketLabel = getRowValue(row, ["bracketLabel", "tramo", "label"]);
+    const fromDay = parseNumber(getRowValue(row, ["fromDay", "desdeDia", "diaDesde"]) || "0");
+    const toDay = parseNumber(getRowValue(row, ["toDay", "hastaDia", "diaHasta"]) || "0");
+    if (!bracketLabel || fromDay <= 0 || toDay <= 0) continue;
+
+    let bracket = data.tariffBrackets.find(
+      (item) => item.tariffPlanId === plan.id && item.label === bracketLabel && item.fromDay === fromDay && item.toDay === toDay,
+    );
+    if (!bracket) {
+      const order = parseNumber(getRowValue(row, ["order", "orden"]) || "0");
+      bracket = {
+        id: crypto.randomUUID(),
+        tariffPlanId: plan.id,
+        label: bracketLabel,
+        fromDay,
+        toDay,
+        order: order || data.tariffBrackets.filter((item) => item.tariffPlanId === plan.id).length + 1,
+        isExtraDay: getRowValue(row, ["isExtraDay", "diaExtra"]) === "true",
+        createdAt: now,
+        createdBy: actor.id,
+        updatedAt: now,
+        updatedBy: actor.id,
+      };
+      data.tariffBrackets.push(bracket);
+      bracketsCreated += 1;
+    } else if (!touchedBrackets.has(bracket.id)) {
+      touchedBrackets.add(bracket.id);
+      bracket.order = parseNumber(getRowValue(row, ["order", "orden"]) || String(bracket.order)) || bracket.order;
+      bracket.isExtraDay = getRowValue(row, ["isExtraDay", "diaExtra"]) === "true";
+      bracket.updatedAt = now;
+      bracket.updatedBy = actor.id;
+    }
+
+    const groupCode = getRowValue(row, ["groupCode", "grupo", "categoria"]).toUpperCase();
+    const priceRaw = getRowValue(row, ["price", "importe", "precio"]);
+    if (!groupCode || !priceRaw) continue;
+    const price = parseNumber(priceRaw);
+    const maxKmPerDay = parseNumber(getRowValue(row, ["maxKmPerDay", "kmDiaMax", "kmMax"]) || "0");
+    const priceExisting = data.tariffPrices.find(
+      (item) => item.tariffPlanId === plan.id && item.bracketId === bracket.id && item.groupCode === groupCode,
+    );
+    if (!priceExisting) {
+      const newPrice: TariffPrice = {
+        id: crypto.randomUUID(),
+        tariffPlanId: plan.id,
+        groupCode,
+        bracketId: bracket.id,
+        price,
+        maxKmPerDay,
+        createdAt: now,
+        createdBy: actor.id,
+        updatedAt: now,
+        updatedBy: actor.id,
+      };
+      data.tariffPrices.push(newPrice);
+      pricesCreated += 1;
+    } else {
+      touchedPrices.add(priceExisting.id);
+      priceExisting.price = price;
+      priceExisting.maxKmPerDay = maxKmPerDay;
+      priceExisting.updatedAt = now;
+      priceExisting.updatedBy = actor.id;
+    }
+  }
+
+  await writeRentalData(data);
+  return {
+    rows: rows.length,
+    plansCreated,
+    plansUpdated: touchedPlans.size,
+    bracketsCreated,
+    bracketsUpdated: touchedBrackets.size,
+    pricesCreated,
+    pricesUpdated: touchedPrices.size,
+  };
+}
+
+export async function importVehiclesFromCsv(csvRaw: string, actor: { id: string; role: RoleName }) {
+  const rows = parseCsvRecords(csvRaw);
+  if (rows.length === 0) {
+    return {
+      rows: 0,
+      categoriesCreated: 0,
+      categoriesUpdated: 0,
+      modelsCreated: 0,
+      modelsUpdated: 0,
+      fleetCreated: 0,
+      fleetUpdated: 0,
+    };
+  }
+
+  const data = await readRentalData();
+  const now = new Date().toISOString();
+  let categoriesCreated = 0;
+  let modelsCreated = 0;
+  let fleetCreated = 0;
+  const touchedCategoryIds = new Set<string>();
+  const touchedModelIds = new Set<string>();
+  const touchedFleetIds = new Set<string>();
+
+  for (const row of rows) {
+    const categoryCode = (getRowValue(row, ["categoryCode", "groupCode", "grupo", "categoria"]) || "").toUpperCase();
+    const categoryName = getRowValue(row, ["categoryName", "groupName", "nombreCategoria", "categoriaNombre"]);
+    const brand = getRowValue(row, ["brand", "marca"]);
+    const modelName = getRowValue(row, ["model", "modelo"]);
+    const plate = (getRowValue(row, ["plate", "matricula"]) || "").toUpperCase();
+    if (!brand || !modelName || !plate) continue;
+
+    let category =
+      data.vehicleCategories.find((item) => item.code === categoryCode) ??
+      data.vehicleCategories.find((item) => item.name.toLowerCase() === categoryName.toLowerCase());
+
+    if (!category) {
+      category = {
+        id: crypto.randomUUID(),
+        code: categoryCode || categoryName.toUpperCase().replace(/\s+/g, "-") || "GRP-IMPORT",
+        name: categoryName || categoryCode || "Categoría importada",
+        summary: getRowValue(row, ["categorySummary", "resumen"]),
+        transmissionRequired: getRowValue(row, ["transmissionRequired", "transmision"]) === "AUTOMATICO" ? "AUTOMATICO" : "MANUAL",
+        minSeats: parseNumber(getRowValue(row, ["minSeats", "plazas"]) || "0"),
+        minDoors: parseNumber(getRowValue(row, ["minDoors", "puertas"]) || "0"),
+        minLuggage: parseNumber(getRowValue(row, ["minLuggage", "maletas"]) || "0"),
+        fuelType: getRowValue(row, ["fuelType", "combustible"]),
+        airConditioning: getRowValue(row, ["airConditioning", "aire"]) === "true",
+        insurancePrice: parseNumber(getRowValue(row, ["insurancePrice", "precioSeguro"]) || "0"),
+        deductiblePrice: parseNumber(getRowValue(row, ["deductiblePrice", "precioFranquicia"]) || "0"),
+        depositPrice: parseNumber(getRowValue(row, ["depositPrice", "precioFianza"]) || "0"),
+        createdAt: now,
+        createdBy: actor.id,
+      };
+      data.vehicleCategories.push(category);
+      categoriesCreated += 1;
+    } else {
+      touchedCategoryIds.add(category.id);
+      category.name = categoryName || category.name;
+      category.summary = getRowValue(row, ["categorySummary", "resumen"]) || category.summary;
+      category.fuelType = getRowValue(row, ["fuelType", "combustible"]) || category.fuelType;
+    }
+
+    let model = data.vehicleModels.find(
+      (item) => item.brand.toLowerCase() === brand.toLowerCase() && item.model.toLowerCase() === modelName.toLowerCase(),
+    );
+    if (!model) {
+      model = {
+        id: crypto.randomUUID(),
+        brand,
+        model: modelName,
+        transmission: getRowValue(row, ["transmission", "transmision"]) === "AUTOMATICO" ? "AUTOMATICO" : "MANUAL",
+        features: getRowValue(row, ["features", "caracteristicas"]),
+        fuelType: getRowValue(row, ["fuelType", "combustible"]) || category.fuelType,
+        categoryId: category.id,
+        createdAt: now,
+        createdBy: actor.id,
+      };
+      data.vehicleModels.push(model);
+      modelsCreated += 1;
+    } else {
+      touchedModelIds.add(model.id);
+      model.categoryId = category.id || model.categoryId;
+      model.transmission = getRowValue(row, ["transmission", "transmision"]) === "AUTOMATICO" ? "AUTOMATICO" : model.transmission;
+      model.fuelType = getRowValue(row, ["fuelType", "combustible"]) || model.fuelType;
+    }
+
+    const existingFleet = data.fleetVehicles.find((item) => item.plate.toUpperCase() === plate);
+    if (!existingFleet) {
+      data.fleetVehicles.push({
+        id: crypto.randomUUID(),
+        plate,
+        modelId: model.id,
+        categoryId: category.id,
+        owner: normalizeOwnerName(getRowValue(row, ["owner", "propietario"])),
+        color: getRowValue(row, ["color"]),
+        year: parseNumber(getRowValue(row, ["year", "anio"]) || "0"),
+        vin: getRowValue(row, ["vin", "bastidor"]),
+        odometerKm: parseNumber(getRowValue(row, ["odometerKm", "odometro", "km"]) || "0"),
+        fuelType: getRowValue(row, ["fuelType", "combustible"]) || model.fuelType,
+        activeFrom: getRowValue(row, ["activeFrom", "fechaAlta"]) || now.slice(0, 10),
+        activeUntil: getRowValue(row, ["activeUntil", "fechaBaja"]),
+        acquisitionCost: parseNumber(getRowValue(row, ["acquisitionCost", "costeAdquisicion"]) || "0"),
+        alertNotes: getRowValue(row, ["alertNotes", "notasAlerta"]),
+        deactivatedAt: "",
+        deactivationReason: "",
+        deactivationAmount: 0,
+        createdAt: now,
+        createdBy: actor.id,
+      });
+      fleetCreated += 1;
+    } else {
+      touchedFleetIds.add(existingFleet.id);
+      existingFleet.modelId = model.id;
+      existingFleet.categoryId = category.id;
+      existingFleet.owner = normalizeOwnerName(getRowValue(row, ["owner", "propietario"]) || existingFleet.owner);
+      existingFleet.color = getRowValue(row, ["color"]) || existingFleet.color;
+      existingFleet.year = parseNumber(getRowValue(row, ["year", "anio"]) || String(existingFleet.year));
+      existingFleet.vin = getRowValue(row, ["vin", "bastidor"]) || existingFleet.vin;
+      existingFleet.odometerKm = parseNumber(
+        getRowValue(row, ["odometerKm", "odometro", "km"]) || String(existingFleet.odometerKm),
+      );
+      existingFleet.fuelType = getRowValue(row, ["fuelType", "combustible"]) || existingFleet.fuelType;
+      existingFleet.activeFrom = getRowValue(row, ["activeFrom", "fechaAlta"]) || existingFleet.activeFrom;
+      existingFleet.activeUntil = getRowValue(row, ["activeUntil", "fechaBaja"]) || existingFleet.activeUntil;
+      existingFleet.acquisitionCost = parseNumber(
+        getRowValue(row, ["acquisitionCost", "costeAdquisicion"]) || String(existingFleet.acquisitionCost),
+      );
+      existingFleet.alertNotes = getRowValue(row, ["alertNotes", "notasAlerta"]) || existingFleet.alertNotes;
+    }
+  }
+
+  await writeRentalData(data);
+  return {
+    rows: rows.length,
+    categoriesCreated,
+    categoriesUpdated: touchedCategoryIds.size,
+    modelsCreated,
+    modelsUpdated: touchedModelIds.size,
+    fleetCreated,
+    fleetUpdated: touchedFleetIds.size,
   };
 }

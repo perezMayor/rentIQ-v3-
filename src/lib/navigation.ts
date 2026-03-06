@@ -10,11 +10,12 @@ export const NAV_ITEMS: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", roles: ["SUPER_ADMIN", "ADMIN", "LECTOR"] },
   { href: "/reservas", label: "Reservas", roles: ["SUPER_ADMIN", "ADMIN", "LECTOR"] },
   { href: "/contratos", label: "Contratos", roles: ["SUPER_ADMIN", "ADMIN", "LECTOR"] },
-  { href: "/vehiculos", label: "Vehículos", roles: ["SUPER_ADMIN", "ADMIN", "LECTOR"] },
-  { href: "/clientes", label: "Clientes", roles: ["SUPER_ADMIN", "ADMIN", "LECTOR"] },
-  { href: "/facturacion", label: "Facturación", roles: ["SUPER_ADMIN", "ADMIN", "LECTOR"] },
+  { href: "/vehiculos", label: "Vehículos", roles: ["SUPER_ADMIN", "ADMIN"] },
+  { href: "/clientes", label: "Clientes", roles: ["SUPER_ADMIN", "ADMIN"] },
+  { href: "/facturacion", label: "Facturación", roles: ["SUPER_ADMIN", "ADMIN"] },
   { href: "/gestor", label: "Gestor", roles: ["SUPER_ADMIN", "ADMIN"] },
   { href: "/ayuda", label: "Ayuda", roles: ["SUPER_ADMIN", "ADMIN", "LECTOR"] },
+  { href: "/configuracion", label: "Configuración", roles: ["SUPER_ADMIN", "ADMIN"] },
 ];
 
 // Filtra navegación por rol para no exponer módulos no autorizados en UI.

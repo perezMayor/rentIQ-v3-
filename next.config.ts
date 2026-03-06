@@ -6,6 +6,7 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: path.resolve(__dirname),
   },
+  distDir: process.env.NEXT_DIST_DIR?.trim() || ".next",
 };
 
 export default nextConfig;

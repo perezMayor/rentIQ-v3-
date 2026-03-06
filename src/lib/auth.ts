@@ -1,7 +1,9 @@
 import { cookies } from "next/headers";
+import { DEFAULT_BRANCH_ID, isBranchId, type BranchId } from "@/lib/branches";
 
 // Nombre de cookie exclusivo de la V3 para evitar colisiones con otras apps/entornos.
 export const SESSION_COOKIE = "rq_v3_session";
+export const BRANCH_COOKIE = "rq_v3_branch";
 
 export const ROLES = ["SUPER_ADMIN", "ADMIN", "LECTOR"] as const;
 export type Role = (typeof ROLES)[number];
@@ -34,9 +36,50 @@ const DEMO_USERS: Record<Role, SessionUser> = {
   },
 };
 
+const DEMO_PASSWORDS: Record<Role, string> = {
+  SUPER_ADMIN: "SuperAdmin#2026",
+  ADMIN: "Admin#2026",
+  LECTOR: "Lector#2026",
+};
+
 // Resuelve un usuario demo a partir del rol recibido en login.
 export function getDemoUserByRole(role: Role): SessionUser {
   return DEMO_USERS[role];
+}
+
+// Resuelve un usuario demo por correo para login con permisos asociados al email.
+export function getDemoUserByEmail(emailRaw: string): SessionUser | null {
+  const email = emailRaw.trim().toLowerCase();
+  const exact = Object.values(DEMO_USERS).find((item) => item.email.toLowerCase() === email);
+  if (exact) {
+    return exact;
+  }
+
+  const [localPart] = email.split("@");
+  if (!localPart) {
+    return null;
+  }
+
+  if (localPart === "superadmin") {
+    return DEMO_USERS.SUPER_ADMIN;
+  }
+  if (localPart === "admin") {
+    return DEMO_USERS.ADMIN;
+  }
+  if (localPart === "lector") {
+    return DEMO_USERS.LECTOR;
+  }
+
+  return null;
+}
+
+export function validateDemoCredentials(emailRaw: string, passwordRaw: string): SessionUser | null {
+  const user = getDemoUserByEmail(emailRaw);
+  if (!user) {
+    return null;
+  }
+  const expectedPassword = DEMO_PASSWORDS[user.role];
+  return passwordRaw === expectedPassword ? user : null;
 }
 
 // Lee cookie de sesión y la traduce a usuario de la tabla en memoria.
@@ -49,6 +92,15 @@ export async function getSessionUser(): Promise<SessionUser | null> {
 
   const user = Object.values(DEMO_USERS).find((item) => item.id === raw);
   return user ?? null;
+}
+
+export async function getSelectedBranchId(): Promise<BranchId> {
+  const cookieStore = await cookies();
+  const raw = cookieStore.get(BRANCH_COOKIE)?.value;
+  if (raw && isBranchId(raw)) {
+    return raw;
+  }
+  return DEFAULT_BRANCH_ID;
 }
 
 // Guardia de autenticación para acciones/rutas que requieren sesión obligatoria.

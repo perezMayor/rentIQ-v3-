@@ -1,3 +1,4 @@
+// Endpoint HTTP de contratos/preimpresion.
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { buildContractPreprintDocument } from "@/lib/services/contract-preprint-document-service";

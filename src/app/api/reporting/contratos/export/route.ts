@@ -1,3 +1,4 @@
+// Endpoint HTTP de reporting/contratos/export.
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { listContracts } from "@/lib/services/rental-service";

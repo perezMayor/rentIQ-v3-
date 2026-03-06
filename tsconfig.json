@@ -1,7 +1,11 @@
 {
   "compilerOptions": {
     "target": "ES2017",
-    "lib": ["dom", "dom.iterable", "esnext"],
+    "lib": [
+      "dom",
+      "dom.iterable",
+      "esnext"
+    ],
     "allowJs": true,
     "skipLibCheck": true,
     "strict": true,
@@ -19,7 +23,9 @@
       }
     ],
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": [
+        "./src/*"
+      ]
     }
   },
   "include": [
@@ -28,7 +34,29 @@
     "**/*.tsx",
     ".next/types/**/*.ts",
     ".next/dev/types/**/*.ts",
-    "**/*.mts"
+    "**/*.mts",
+    "/var/folders/k7/hdrfystj7mx4y5gytfzl4b000000gn/T/rentiq-auth-dist-uWmi6I/types/**/*.ts",
+    "/var/folders/k7/hdrfystj7mx4y5gytfzl4b000000gn/T/rentiq-auth-dist-uWmi6I/dev/types/**/*.ts",
+    "/var/folders/k7/hdrfystj7mx4y5gytfzl4b000000gn/T/rentiq-auth-dist-nzYadf/types/**/*.ts",
+    "/var/folders/k7/hdrfystj7mx4y5gytfzl4b000000gn/T/rentiq-auth-dist-nzYadf/dev/types/**/*.ts",
+    "/var/folders/k7/hdrfystj7mx4y5gytfzl4b000000gn/T/rentiq-health-dist-YXdqYj/types/**/*.ts",
+    "/var/folders/k7/hdrfystj7mx4y5gytfzl4b000000gn/T/rentiq-health-dist-YXdqYj/dev/types/**/*.ts",
+    "/var/folders/k7/hdrfystj7mx4y5gytfzl4b000000gn/T/rentiq-health-dist-43urKm/types/**/*.ts",
+    "/var/folders/k7/hdrfystj7mx4y5gytfzl4b000000gn/T/rentiq-health-dist-43urKm/dev/types/**/*.ts",
+    "/Users/javierperez/Desktop/rentiq_gestion_V3/.next-health-dist-6MQuzk/types/**/*.ts",
+    "/Users/javierperez/Desktop/rentiq_gestion_V3/.next-health-dist-6MQuzk/dev/types/**/*.ts",
+    "/Users/javierperez/Desktop/rentiq_gestion_V3/.next-auth-dist-a1fOVz/types/**/*.ts",
+    "/Users/javierperez/Desktop/rentiq_gestion_V3/.next-auth-dist-a1fOVz/dev/types/**/*.ts",
+    ".next-health-dist-GSHbAX/types/**/*.ts",
+    ".next-health-dist-GSHbAX/dev/types/**/*.ts",
+    ".next-auth-dist-5LwwpW/types/**/*.ts",
+    ".next-auth-dist-5LwwpW/dev/types/**/*.ts",
+    ".next-health-dist-CBAaGH/types/**/*.ts",
+    ".next-health-dist-CBAaGH/dev/types/**/*.ts",
+    ".next-auth-dist-roY7PT/types/**/*.ts",
+    ".next-auth-dist-roY7PT/dev/types/**/*.ts"
   ],
-  "exclude": ["node_modules"]
+  "exclude": [
+    "node_modules"
+  ]
 }

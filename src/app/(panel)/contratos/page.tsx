@@ -1,3 +1,4 @@
+// Página del módulo contratos.
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getSessionUser } from "@/lib/auth";
@@ -14,6 +15,9 @@ import {
   listContracts,
   listClients,
   listFleetVehicles,
+  listVehicleExtras,
+  listTariffPlans,
+  listReservations,
   registerContractCash,
   registerContractCheckIn,
   registerContractCheckOut,
@@ -22,6 +26,9 @@ import {
 } from "@/lib/services/rental-service";
 import styles from "./contratos.module.css";
 import { ContractCreateForm } from "@/app/(panel)/contratos/contract-create-form";
+import { ModuleHelp } from "@/components/module-help";
+import { withActionLock } from "@/lib/action-lock";
+import { getActionErrorMessage } from "@/lib/action-errors";
 
 type ContractsTab = "gestion" | "historico" | "localizar" | "cambio" | "renumerar" | "asignacion" | "informes";
 
@@ -60,6 +67,13 @@ function normalizeTab(value: string): ContractsTab {
   return "gestion";
 }
 
+function allowedTabsByRole(role: string): ContractsTab[] {
+  if (role === "LECTOR") {
+    return ["gestion", "historico", "localizar", "informes"];
+  }
+  return ["gestion", "historico", "localizar", "cambio", "renumerar", "asignacion", "informes"];
+}
+
 function parseDateSafe(value: string) {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return null;
@@ -81,12 +95,26 @@ function defaultRange(days = 30) {
   return { from: from.toISOString().slice(0, 10), to: now.toISOString().slice(0, 10) };
 }
 
+function toDateTimeLocal(value: string | null | undefined): string {
+  if (!value) return "";
+  const normalized = value.trim();
+  if (!normalized) return "";
+  if (normalized.includes("T")) {
+    return normalized.slice(0, 16);
+  }
+  const parsed = new Date(normalized);
+  if (Number.isNaN(parsed.getTime())) return "";
+  return parsed.toISOString().slice(0, 16);
+}
+
 export default async function ContratosPage({ searchParams }: Props) {
   const user = await getSessionUser();
   if (!user) redirect("/login");
 
   const params = await searchParams;
-  const tab = normalizeTab((params.tab ?? "gestion").toLowerCase());
+  const requestedTab = normalizeTab((params.tab ?? "gestion").toLowerCase());
+  const allowedTabs = allowedTabsByRole(user.role);
+  const tab = allowedTabs.includes(requestedTab) ? requestedTab : allowedTabs[0];
   const canWrite = user.role !== "LECTOR";
   const range30 = defaultRange(30);
 
@@ -111,12 +139,24 @@ export default async function ContratosPage({ searchParams }: Props) {
   const reportOrder = (params.reportOrder ?? "DESC").toUpperCase();
   const reportDateField = (params.reportDateField ?? "CREACION").toUpperCase();
 
-  const [contracts, fleet, settings, clients] = await Promise.all([listContracts(""), listFleetVehicles(), getCompanySettings(), listClients("", "TODOS")]);
+  const [contracts, reservations, fleet, settings, clients, tariffPlans, vehicleExtras] = await Promise.all([
+    listContracts(""),
+    listReservations(""),
+    listFleetVehicles(),
+    getCompanySettings(),
+    listClients("", "TODOS"),
+    listTariffPlans(""),
+    listVehicleExtras(),
+  ]);
 
   const loadedContractByNumber = contractNumber ? await getContractByNumber(contractNumber) : null;
   const loadedContractById = contractId ? contracts.find((item) => item.id === contractId) ?? null : null;
   const loadedContract = loadedContractByNumber ?? loadedContractById;
+  const loadedReservation = loadedContract
+    ? reservations.find((reservation) => reservation.id === loadedContract.reservationId) ?? null
+    : null;
   const loadedDetail = loadedContract ? await getContractDetails(loadedContract.id) : null;
+  const loadedContractLocked = Boolean(loadedContract && (loadedContract.status === "CERRADO" || loadedDetail?.invoice));
   const auditItems = auditContractId ? await listContractAudit(auditContractId) : [];
 
   const historicalContracts = contracts
@@ -151,6 +191,15 @@ export default async function ContratosPage({ searchParams }: Props) {
   const selectedAssignContract = assignContractId
     ? unassignedContracts.find((contract) => contract.id === assignContractId) ?? null
     : null;
+  const helpByTab: Record<ContractsTab, string[]> = {
+    gestion: ["Crea o carga contrato.", "Verifica cliente, tramo y vehículo.", "Guarda y opera checkout/checkin."],
+    historico: ["Filtra por rango.", "Abre contrato.", "Audita eventos."],
+    localizar: ["Busca por contrato, cliente o matrícula.", "Abre gestión.", "Escala a cambio/renumeración."],
+    cambio: ["Carga contrato abierto.", "Informa motivo y datos operativos.", "Confirma cambio."],
+    renumerar: ["Carga contrato abierto.", "Indica sucursal destino.", "Confirma renumeración."],
+    asignacion: ["Filtra sin matrícula.", "Asigna vehículo.", "Usa override solo con motivo."],
+    informes: ["Define filtros.", "Valida resultados.", "Exporta CSV."],
+  };
   const selectedRenumberContractById = renumberContractId
     ? openContracts.find((contract) => contract.id === renumberContractId) ?? null
     : null;
@@ -192,13 +241,20 @@ export default async function ContratosPage({ searchParams }: Props) {
     if (actor.role === "LECTOR") redirect("/contratos?tab=gestion&error=Permiso+denegado");
     const input = Object.fromEntries(formData.entries()) as Record<string, string>;
     try {
-      const created = await createContractFromScratch(input, { id: actor.id, role: actor.role });
+      const lockKey = [
+        "contract:create",
+        actor.id,
+        input.customerId ?? input.customerName ?? "",
+        input.deliveryAt ?? "",
+        input.pickupAt ?? "",
+      ].join("|");
+      const created = await withActionLock(lockKey, async () => createContractFromScratch(input, { id: actor.id, role: actor.role }));
       revalidatePath("/contratos");
       revalidatePath("/reservas");
       revalidatePath("/planning");
       redirect(`/contratos?tab=gestion&contractNumber=${encodeURIComponent(created.contractNumber)}&ok=${encodeURIComponent("Contrato generado")}`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error al generar contrato";
+      const message = getActionErrorMessage(error, "Error al generar contrato");
       redirect(`/contratos?tab=gestion&error=${encodeURIComponent(message)}`);
     }
   }
@@ -209,14 +265,29 @@ export default async function ContratosPage({ searchParams }: Props) {
     if (!actor) redirect("/login");
     if (actor.role === "LECTOR") redirect("/contratos?error=Permiso+denegado");
     const contractId = String(formData.get("contractId") ?? "");
+    const detail = await getContractDetails(contractId);
+    if (!detail) {
+      redirect(`/contratos?tab=gestion&error=${encodeURIComponent("Contrato no encontrado")}`);
+    }
+    if (detail.invoice) {
+      redirect(
+        `/contratos?tab=gestion&contractId=${encodeURIComponent(contractId)}&contractNumber=${encodeURIComponent(detail.contract.contractNumber)}&error=${encodeURIComponent("Contrato facturado: no se puede modificar.")}`,
+      );
+    }
     const input = Object.fromEntries(formData.entries()) as Record<string, string>;
     try {
-      await registerContractCash(contractId, input, { id: actor.id, role: actor.role });
+      await withActionLock(`contract:cash:${actor.id}:${contractId}`, async () => {
+        await registerContractCash(contractId, input, { id: actor.id, role: actor.role });
+      });
       revalidatePath("/contratos");
-      redirect(`/contratos?tab=gestion&ok=${encodeURIComponent("Caja registrada")}`);
+      redirect(
+        `/contratos?tab=gestion&contractId=${encodeURIComponent(contractId)}&contractNumber=${encodeURIComponent(detail.contract.contractNumber)}&ok=${encodeURIComponent("Caja registrada")}`,
+      );
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error al registrar caja";
-      redirect(`/contratos?tab=gestion&error=${encodeURIComponent(message)}`);
+      const message = getActionErrorMessage(error, "Error al registrar caja");
+      redirect(
+        `/contratos?tab=gestion&contractId=${encodeURIComponent(contractId)}&contractNumber=${encodeURIComponent(detail.contract.contractNumber)}&error=${encodeURIComponent(message)}`,
+      );
     }
   }
 
@@ -226,14 +297,29 @@ export default async function ContratosPage({ searchParams }: Props) {
     if (!actor) redirect("/login");
     if (actor.role === "LECTOR") redirect("/contratos?error=Permiso+denegado");
     const contractId = String(formData.get("contractId") ?? "");
+    const detail = await getContractDetails(contractId);
+    if (!detail) {
+      redirect(`/contratos?tab=gestion&error=${encodeURIComponent("Contrato no encontrado")}`);
+    }
+    if (detail.invoice) {
+      redirect(
+        `/contratos?tab=gestion&contractId=${encodeURIComponent(contractId)}&contractNumber=${encodeURIComponent(detail.contract.contractNumber)}&error=${encodeURIComponent("Contrato facturado: no se puede modificar.")}`,
+      );
+    }
     const input = Object.fromEntries(formData.entries()) as Record<string, string>;
     try {
-      await registerContractCheckOut(contractId, input, { id: actor.id, role: actor.role });
+      await withActionLock(`contract:checkout:${actor.id}:${contractId}`, async () => {
+        await registerContractCheckOut(contractId, input, { id: actor.id, role: actor.role });
+      });
       revalidatePath("/contratos");
-      redirect(`/contratos?tab=gestion&ok=${encodeURIComponent("Checkout registrado")}`);
+      redirect(
+        `/contratos?tab=gestion&contractId=${encodeURIComponent(contractId)}&contractNumber=${encodeURIComponent(detail.contract.contractNumber)}&ok=${encodeURIComponent("Checkout registrado")}`,
+      );
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error en checkout";
-      redirect(`/contratos?tab=gestion&error=${encodeURIComponent(message)}`);
+      const message = getActionErrorMessage(error, "Error en checkout");
+      redirect(
+        `/contratos?tab=gestion&contractId=${encodeURIComponent(contractId)}&contractNumber=${encodeURIComponent(detail.contract.contractNumber)}&error=${encodeURIComponent(message)}`,
+      );
     }
   }
 
@@ -243,14 +329,29 @@ export default async function ContratosPage({ searchParams }: Props) {
     if (!actor) redirect("/login");
     if (actor.role === "LECTOR") redirect("/contratos?error=Permiso+denegado");
     const contractId = String(formData.get("contractId") ?? "");
+    const detail = await getContractDetails(contractId);
+    if (!detail) {
+      redirect(`/contratos?tab=gestion&error=${encodeURIComponent("Contrato no encontrado")}`);
+    }
+    if (detail.invoice) {
+      redirect(
+        `/contratos?tab=gestion&contractId=${encodeURIComponent(contractId)}&contractNumber=${encodeURIComponent(detail.contract.contractNumber)}&error=${encodeURIComponent("Contrato facturado: no se puede modificar.")}`,
+      );
+    }
     const input = Object.fromEntries(formData.entries()) as Record<string, string>;
     try {
-      await registerContractCheckIn(contractId, input, { id: actor.id, role: actor.role });
+      await withActionLock(`contract:checkin:${actor.id}:${contractId}`, async () => {
+        await registerContractCheckIn(contractId, input, { id: actor.id, role: actor.role });
+      });
       revalidatePath("/contratos");
-      redirect(`/contratos?tab=gestion&ok=${encodeURIComponent("Checkin registrado")}`);
+      redirect(
+        `/contratos?tab=gestion&contractId=${encodeURIComponent(contractId)}&contractNumber=${encodeURIComponent(detail.contract.contractNumber)}&ok=${encodeURIComponent("Checkin registrado")}`,
+      );
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error en checkin";
-      redirect(`/contratos?tab=gestion&error=${encodeURIComponent(message)}`);
+      const message = getActionErrorMessage(error, "Error en checkin");
+      redirect(
+        `/contratos?tab=gestion&contractId=${encodeURIComponent(contractId)}&contractNumber=${encodeURIComponent(detail.contract.contractNumber)}&error=${encodeURIComponent(message)}`,
+      );
     }
   }
 
@@ -260,14 +361,29 @@ export default async function ContratosPage({ searchParams }: Props) {
     if (!actor) redirect("/login");
     if (actor.role === "LECTOR") redirect("/contratos?error=Permiso+denegado");
     const contractId = String(formData.get("contractId") ?? "");
+    const detail = await getContractDetails(contractId);
+    if (!detail) {
+      redirect(`/contratos?tab=gestion&error=${encodeURIComponent("Contrato no encontrado")}`);
+    }
+    if (detail.invoice) {
+      redirect(
+        `/contratos?tab=gestion&contractId=${encodeURIComponent(contractId)}&contractNumber=${encodeURIComponent(detail.contract.contractNumber)}&error=${encodeURIComponent("Contrato facturado: no se puede modificar.")}`,
+      );
+    }
     try {
-      await closeContract(contractId, { id: actor.id, role: actor.role });
+      await withActionLock(`contract:close:${actor.id}:${contractId}`, async () => {
+        await closeContract(contractId, { id: actor.id, role: actor.role });
+      });
       revalidatePath("/contratos");
       revalidatePath("/facturacion");
-      redirect(`/contratos?tab=gestion&ok=${encodeURIComponent("Contrato cerrado")}`);
+      redirect(
+        `/contratos?tab=gestion&contractId=${encodeURIComponent(contractId)}&contractNumber=${encodeURIComponent(detail.contract.contractNumber)}&ok=${encodeURIComponent("Contrato cerrado")}`,
+      );
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error al cerrar contrato";
-      redirect(`/contratos?tab=gestion&error=${encodeURIComponent(message)}`);
+      const message = getActionErrorMessage(error, "Error al cerrar contrato");
+      redirect(
+        `/contratos?tab=gestion&contractId=${encodeURIComponent(contractId)}&contractNumber=${encodeURIComponent(detail.contract.contractNumber)}&error=${encodeURIComponent(message)}`,
+      );
     }
   }
 
@@ -277,14 +393,29 @@ export default async function ContratosPage({ searchParams }: Props) {
     if (!actor) redirect("/login");
     if (actor.role === "LECTOR") redirect("/contratos?error=Permiso+denegado");
     const contractId = String(formData.get("contractId") ?? "");
+    const detail = await getContractDetails(contractId);
+    if (!detail) {
+      redirect(`/contratos?tab=gestion&error=${encodeURIComponent("Contrato no encontrado")}`);
+    }
+    if (detail.invoice) {
+      redirect(
+        `/contratos?tab=gestion&contractId=${encodeURIComponent(contractId)}&contractNumber=${encodeURIComponent(detail.contract.contractNumber)}&error=${encodeURIComponent("Contrato facturado: no se puede modificar.")}`,
+      );
+    }
     const input = Object.fromEntries(formData.entries()) as Record<string, string>;
     try {
-      await addInternalExpense(contractId, input, { id: actor.id, role: actor.role });
+      await withActionLock(`contract:expense:${actor.id}:${contractId}`, async () => {
+        await addInternalExpense(contractId, input, { id: actor.id, role: actor.role });
+      });
       revalidatePath("/contratos");
-      redirect(`/contratos?tab=gestion&ok=${encodeURIComponent("Gasto añadido")}`);
+      redirect(
+        `/contratos?tab=gestion&contractId=${encodeURIComponent(contractId)}&contractNumber=${encodeURIComponent(detail.contract.contractNumber)}&ok=${encodeURIComponent("Gasto añadido")}`,
+      );
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error al registrar gasto";
-      redirect(`/contratos?tab=gestion&error=${encodeURIComponent(message)}`);
+      const message = getActionErrorMessage(error, "Error al registrar gasto");
+      redirect(
+        `/contratos?tab=gestion&contractId=${encodeURIComponent(contractId)}&contractNumber=${encodeURIComponent(detail.contract.contractNumber)}&error=${encodeURIComponent(message)}`,
+      );
     }
   }
 
@@ -295,11 +426,14 @@ export default async function ContratosPage({ searchParams }: Props) {
     if (actor.role === "LECTOR") redirect("/contratos?error=Permiso+denegado");
     const contractId = String(formData.get("contractId") ?? "");
     try {
-      await updateContract(contractId, Object.fromEntries(formData.entries()) as Record<string, string>, { id: actor.id, role: actor.role });
+      const input = Object.fromEntries(formData.entries()) as Record<string, string>;
+      await withActionLock(`contract:update:${actor.id}:${contractId}`, async () => {
+        await updateContract(contractId, input, { id: actor.id, role: actor.role });
+      });
       revalidatePath("/contratos");
       redirect(`/contratos?tab=historico&ok=${encodeURIComponent("Contrato actualizado")}`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error al actualizar";
+      const message = getActionErrorMessage(error, "Error al actualizar");
       redirect(`/contratos?tab=historico&error=${encodeURIComponent(message)}`);
     }
   }
@@ -311,12 +445,14 @@ export default async function ContratosPage({ searchParams }: Props) {
     if (actor.role === "LECTOR") redirect("/contratos?error=Permiso+denegado");
     const contractId = String(formData.get("contractId") ?? "");
     try {
-      await deleteContract(contractId, { id: actor.id, role: actor.role });
+      await withActionLock(`contract:delete:${actor.id}:${contractId}`, async () => {
+        await deleteContract(contractId, { id: actor.id, role: actor.role });
+      });
       revalidatePath("/contratos");
       revalidatePath("/reservas");
       redirect(`/contratos?tab=historico&ok=${encodeURIComponent("Contrato borrado")}`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error al borrar";
+      const message = getActionErrorMessage(error, "Error al borrar");
       redirect(`/contratos?tab=historico&error=${encodeURIComponent(message)}`);
     }
   }
@@ -348,24 +484,26 @@ export default async function ContratosPage({ searchParams }: Props) {
 
     const input = Object.fromEntries(formData.entries()) as Record<string, string>;
     try {
-      await changeContractVehicle(contract.id, {
-        vehiclePlate: input.vehiclePlate,
-        overrideAccepted: input.overrideAccepted,
-        overrideReason: input.overrideReason,
-        changeAt: input.changeAt,
-        changeReason: input.changeReason,
-        kmOut: input.kmOut,
-        kmIn: input.kmIn,
-        fuelOut: input.fuelOut,
-        fuelIn: input.fuelIn,
-        notes: input.notes,
-      }, { id: actor.id, role: actor.role });
+      await withActionLock(`contract:vehicle-change:${actor.id}:${contract.id}`, async () => {
+        await changeContractVehicle(contract.id, {
+          vehiclePlate: input.vehiclePlate,
+          overrideAccepted: input.overrideAccepted,
+          overrideReason: input.overrideReason,
+          changeAt: input.changeAt,
+          changeReason: input.changeReason,
+          kmOut: input.kmOut,
+          kmIn: input.kmIn,
+          fuelOut: input.fuelOut,
+          fuelIn: input.fuelIn,
+          notes: input.notes,
+        }, { id: actor.id, role: actor.role });
+      });
       revalidatePath("/contratos");
       revalidatePath("/reservas");
       revalidatePath("/planning");
       redirect(`/contratos?tab=cambio&changeContractId=${encodeURIComponent(contract.id)}&ok=${encodeURIComponent("Vehículo cambiado")}`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error al cambiar vehículo";
+      const message = getActionErrorMessage(error, "Error al cambiar vehículo");
       redirect(`/contratos?tab=cambio&changeContractId=${encodeURIComponent(contract.id)}&error=${encodeURIComponent(message)}`);
     }
   }
@@ -386,16 +524,16 @@ export default async function ContratosPage({ searchParams }: Props) {
     }
 
     try {
-      const updated = await renumberContract(contract.id, Object.fromEntries(formData.entries()) as Record<string, string>, {
-        id: actor.id,
-        role: actor.role,
+      const input = Object.fromEntries(formData.entries()) as Record<string, string>;
+      const updated = await withActionLock(`contract:renumber:${actor.id}:${contract.id}`, async () => {
+        return renumberContract(contract.id, input, { id: actor.id, role: actor.role });
       });
       revalidatePath("/contratos");
       redirect(
         `/contratos?tab=renumerar&contractNumber=${encodeURIComponent(updated.contractNumber)}&renumberContractId=${encodeURIComponent(updated.id)}&ok=${encodeURIComponent("Contrato renumerado")}`,
       );
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error al renumerar";
+      const message = getActionErrorMessage(error, "Error al renumerar");
       redirect(`/contratos?tab=renumerar&renumberContractId=${encodeURIComponent(contract.id)}&error=${encodeURIComponent(message)}`);
     }
   }
@@ -408,67 +546,113 @@ export default async function ContratosPage({ searchParams }: Props) {
     const contractId = String(formData.get("contractId") ?? "");
     const input = Object.fromEntries(formData.entries()) as Record<string, string>;
     try {
-      await changeContractVehicle(contractId, {
-        vehiclePlate: input.vehiclePlate,
-        overrideAccepted: input.overrideAccepted,
-        overrideReason: input.overrideReason,
-        changeReason: "ASIGNACION_MANUAL_CONTRATO",
-      }, { id: actor.id, role: actor.role });
+      await withActionLock(`contract:assign-plate:${actor.id}:${contractId}`, async () => {
+        await changeContractVehicle(contractId, {
+          vehiclePlate: input.vehiclePlate,
+          overrideAccepted: input.overrideAccepted,
+          overrideReason: input.overrideReason,
+          changeReason: "ASIGNACION_MANUAL_CONTRATO",
+        }, { id: actor.id, role: actor.role });
+      });
       revalidatePath("/contratos");
       revalidatePath("/reservas");
       revalidatePath("/planning");
       redirect(`/contratos?tab=asignacion&assignContractId=${encodeURIComponent(contractId)}&ok=${encodeURIComponent("Matrícula asignada")}`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error al asignar matrícula";
+      const message = getActionErrorMessage(error, "Error al asignar matrícula");
       redirect(`/contratos?tab=asignacion&assignContractId=${encodeURIComponent(contractId)}&error=${encodeURIComponent(message)}`);
     }
   }
 
   return (
     <div className={`stack-lg ${styles.contractsRoot}`}>
-      <header className="stack-sm">
-        <h2>Contratos</h2>
-      </header>
-
       {params.error ? <p className="danger-text">{params.error}</p> : null}
       {params.ok ? <p className="success-text">{params.ok}</p> : null}
 
       <section className="card stack-sm">
-        <div className="inline-actions-cell">
+        <div className="table-header-row tab-nav-grid">
           <a className={tab === "gestion" ? "primary-btn text-center" : "secondary-btn text-center"} href="/contratos?tab=gestion">Gestión de contrato</a>
           <a className={tab === "historico" ? "primary-btn text-center" : "secondary-btn text-center"} href="/contratos?tab=historico">Histórico</a>
           <a className={tab === "localizar" ? "primary-btn text-center" : "secondary-btn text-center"} href="/contratos?tab=localizar">Localizar contrato</a>
-          <a className={tab === "cambio" ? "primary-btn text-center" : "secondary-btn text-center"} href="/contratos?tab=cambio">Cambio de vehículo</a>
-          <a className={tab === "renumerar" ? "primary-btn text-center" : "secondary-btn text-center"} href="/contratos?tab=renumerar">Renumerar</a>
-          <a className={tab === "asignacion" ? "primary-btn text-center" : "secondary-btn text-center"} href="/contratos?tab=asignacion">Asignación matrículas</a>
+          {allowedTabs.includes("cambio") ? <a className={tab === "cambio" ? "primary-btn text-center" : "secondary-btn text-center"} href="/contratos?tab=cambio">Cambio de vehículo</a> : null}
+          {allowedTabs.includes("renumerar") ? <a className={tab === "renumerar" ? "primary-btn text-center" : "secondary-btn text-center"} href="/contratos?tab=renumerar">Renumerar</a> : null}
+          {allowedTabs.includes("asignacion") ? <a className={tab === "asignacion" ? "primary-btn text-center" : "secondary-btn text-center"} href="/contratos?tab=asignacion">Asignación matrículas</a> : null}
           <a className={tab === "informes" ? "primary-btn text-center" : "secondary-btn text-center"} href="/contratos?tab=informes">Informes de contratos</a>
         </div>
       </section>
+      <ModuleHelp title="Ayuda rápida de Contratos" steps={helpByTab[tab]} />
 
       {tab === "gestion" ? (
         <>
           <section className="card stack-sm">
-            <h3>Gestión de contrato</h3>
-            <p className="muted-text">Crear contrato o cargar uno existente por número.</p>
-            <ContractCreateForm
-              action={createContractFromScratchAction}
-              canWrite={canWrite}
-              clients={clients.map((client) => ({
-                id: client.id,
-                clientCode: client.clientCode,
-                clientType: client.clientType,
-                firstName: client.firstName,
-                lastName: client.lastName,
-                companyName: client.companyName,
-                commissionerName: client.commissionerName,
-                acquisitionChannel: client.acquisitionChannel,
-              }))}
-            />
+            {loadedContractLocked ? <p className="danger-text">Contrato facturado: formulario en solo lectura.</p> : null}
             <form method="GET" className="inline-search">
               <input type="hidden" name="tab" value="gestion" />
               <input name="contractNumber" defaultValue={contractNumber} placeholder="Introducir nº contrato" />
               <button className="secondary-btn" type="submit">Cargar contrato</button>
             </form>
+            {canWrite ? (
+              <ContractCreateForm
+                key={loadedContract?.id ?? "contract-create-new"}
+                action={createContractFromScratchAction}
+                canWrite={canWrite && !loadedContractLocked}
+                vehicles={fleet.map((vehicle) => ({
+                  plate: vehicle.plate,
+                  groupLabel: vehicle.categoryLabel.split(" - ")[0] || vehicle.categoryLabel,
+                }))}
+                tariffOptions={tariffPlans.map((plan) => ({ id: plan.id, code: plan.code, title: plan.title }))}
+                salesChannels={settings.salesChannels ?? []}
+                initialValues={
+                  loadedContract
+                    ? {
+                        lookup: loadedContract.customerName || "",
+                        customerId: loadedReservation?.customerId ?? "",
+                        customerName: loadedContract.customerName || "",
+                        customerCompany: loadedContract.companyName || "",
+                        branchDelivery: loadedReservation?.branchDelivery || loadedContract.branchCode || "",
+                        deliveryPlace: loadedReservation?.deliveryPlace || "",
+                        deliveryAt: toDateTimeLocal(loadedContract.deliveryAt),
+                        pickupBranch: loadedReservation?.pickupBranch || loadedContract.branchCode || "",
+                        pickupPlace: loadedReservation?.pickupPlace || "",
+                        pickupAt: toDateTimeLocal(loadedContract.pickupAt),
+                        billedCarGroup: loadedContract.billedCarGroup || "",
+                        assignedVehicleGroup:
+                          fleet.find((vehicle) => vehicle.plate.toUpperCase() === loadedContract.vehiclePlate.toUpperCase())?.categoryLabel.split(" - ")[0] || "",
+                        assignedPlate: loadedContract.vehiclePlate || "",
+                        appliedRate: loadedReservation?.appliedRate || "",
+                        salesChannel: loadedReservation?.salesChannel || "",
+                        totalPrice: String(loadedContract.totalSettlement || loadedReservation?.totalPrice || ""),
+                        customerCommissioner: loadedReservation?.customerCommissioner || "",
+                        billedDays: String(loadedReservation?.billedDays || 1),
+                        ivaPercent: String(loadedContract.ivaPercent || loadedReservation?.ivaPercent || 21),
+                        deductible: loadedContract.deductible || loadedReservation?.deductible || "",
+                        depositAmount: String(loadedReservation?.depositAmount || 0),
+                        paymentsMade: String(loadedContract.paymentsMade || loadedReservation?.paymentsMade || 0),
+                        fuelPolicy: loadedReservation?.fuelPolicy || "",
+                        baseAmount: String(loadedContract.baseAmount || loadedReservation?.baseAmount || 0),
+                        discountAmount: String(loadedContract.discountAmount || loadedReservation?.discountAmount || 0),
+                        extrasAmount: String(loadedContract.extrasAmount || loadedReservation?.extrasAmount || 0),
+                        fuelAmount: String(loadedContract.fuelAmount || loadedReservation?.fuelAmount || 0),
+                        insuranceAmount: String(loadedContract.insuranceAmount || loadedReservation?.insuranceAmount || 0),
+                        penaltiesAmount: String(loadedContract.penaltiesAmount || loadedReservation?.penaltiesAmount || 0),
+                        extrasBreakdown: loadedReservation?.extrasBreakdown || "",
+                        additionalDrivers: loadedReservation?.additionalDrivers || "",
+                      }
+                    : undefined
+                }
+                clients={clients.map((client) => ({
+                  id: client.id,
+                  clientCode: client.clientCode,
+                  clientType: client.clientType,
+                  firstName: client.firstName,
+                  lastName: client.lastName,
+                  companyName: client.companyName,
+                  commissionerName: client.commissionerName,
+                  acquisitionChannel: client.acquisitionChannel,
+                }))}
+                extraOptions={vehicleExtras.filter((item) => item.active)}
+              />
+            ) : null}
           </section>
 
           {loadedContract ? (
@@ -478,21 +662,26 @@ export default async function ContratosPage({ searchParams }: Props) {
                 <a className="secondary-btn text-center" href={`/api/contratos/${loadedContract.id}/pdf`}>Imprimir contrato</a>
               </div>
               <p className="muted-text">{loadedContract.customerName} | {loadedContract.vehiclePlate || "Sin matrícula"} | {loadedContract.deliveryAt} → {loadedContract.pickupAt}</p>
+              {loadedDetail?.invoice ? (
+                <p className="danger-text">
+                  Contrato facturado ({loadedDetail.invoice.invoiceNumber}). No se puede modificar.
+                </p>
+              ) : null}
 
               <details>
                 <summary>Caja</summary>
                 <form action={registerCashAction} className="mini-form" style={{ marginTop: "0.6rem" }}>
                   <input type="hidden" name="contractId" value={loadedContract.id} />
-                  <input name="amount" type="number" step="0.01" placeholder="Importe" disabled={!canWrite || loadedContract.status === "CERRADO"} />
-                  <select name="method" defaultValue="EFECTIVO" disabled={!canWrite || loadedContract.status === "CERRADO"}>
+                  <input name="amount" type="number" step="0.01" placeholder="Importe" disabled={!canWrite || loadedContractLocked} />
+                  <select name="method" defaultValue="EFECTIVO" disabled={!canWrite || loadedContractLocked}>
                     <option value="EFECTIVO">Efectivo</option>
                     <option value="TARJETA">Tarjeta</option>
                     <option value="TRANSFERENCIA">Transferencia</option>
                     <option value="OTRO">Otro</option>
                   </select>
-                  <input name="cardLast4" maxLength={4} placeholder="Últimos 4" disabled={!canWrite || loadedContract.status === "CERRADO"} />
-                  <input name="notes" placeholder="Notas" disabled={!canWrite || loadedContract.status === "CERRADO"} />
-                  <button className="secondary-btn" type="submit" disabled={!canWrite || loadedContract.status === "CERRADO"}>Guardar caja</button>
+                  <input name="cardLast4" maxLength={4} placeholder="Últimos 4" disabled={!canWrite || loadedContractLocked} />
+                  <input name="notes" placeholder="Notas" disabled={!canWrite || loadedContractLocked} />
+                  <button className="secondary-btn" type="submit" disabled={!canWrite || loadedContractLocked}>Guardar caja</button>
                 </form>
               </details>
 
@@ -500,17 +689,21 @@ export default async function ContratosPage({ searchParams }: Props) {
                 <summary>Checkout / Checkin</summary>
                 <form action={checkOutAction} className="mini-form" style={{ marginTop: "0.6rem" }}>
                   <input type="hidden" name="contractId" value={loadedContract.id} />
-                  <input name="km" type="number" step="1" placeholder="KM salida" disabled={!canWrite || loadedContract.status === "CERRADO"} />
-                  <input name="fuelLevel" placeholder="Combustible salida" disabled={!canWrite || loadedContract.status === "CERRADO"} />
-                  <input name="notes" placeholder="Notas salida" disabled={!canWrite || loadedContract.status === "CERRADO"} />
-                  <button className="secondary-btn" type="submit" disabled={!canWrite || loadedContract.status === "CERRADO"}>Guardar checkout</button>
+                  <input name="km" type="number" step="1" placeholder="KM salida" disabled={!canWrite || loadedContractLocked} />
+                  <input name="fuelLevel" placeholder="Combustible salida" disabled={!canWrite || loadedContractLocked} />
+                  <input name="notes" placeholder="Notas salida" disabled={!canWrite || loadedContractLocked} />
+                  <input name="signerName" placeholder="Firmante salida" disabled={!canWrite || loadedContractLocked} />
+                  <input name="signatureDevice" placeholder="Dispositivo firma (tablet/web)" disabled={!canWrite || loadedContractLocked} />
+                  <button className="secondary-btn" type="submit" disabled={!canWrite || loadedContractLocked}>Guardar checkout</button>
                 </form>
                 <form action={checkInAction} className="mini-form" style={{ marginTop: "0.6rem" }}>
                   <input type="hidden" name="contractId" value={loadedContract.id} />
-                  <input name="km" type="number" step="1" placeholder="KM llegada" disabled={!canWrite || loadedContract.status === "CERRADO"} />
-                  <input name="fuelLevel" placeholder="Combustible llegada" disabled={!canWrite || loadedContract.status === "CERRADO"} />
-                  <input name="notes" placeholder="Notas llegada" disabled={!canWrite || loadedContract.status === "CERRADO"} />
-                  <button className="secondary-btn" type="submit" disabled={!canWrite || loadedContract.status === "CERRADO"}>Guardar checkin</button>
+                  <input name="km" type="number" step="1" placeholder="KM llegada" disabled={!canWrite || loadedContractLocked} />
+                  <input name="fuelLevel" placeholder="Combustible llegada" disabled={!canWrite || loadedContractLocked} />
+                  <input name="notes" placeholder="Notas llegada" disabled={!canWrite || loadedContractLocked} />
+                  <input name="signerName" placeholder="Firmante llegada" disabled={!canWrite || loadedContractLocked} />
+                  <input name="signatureDevice" placeholder="Dispositivo firma (tablet/web)" disabled={!canWrite || loadedContractLocked} />
+                  <button className="secondary-btn" type="submit" disabled={!canWrite || loadedContractLocked}>Guardar checkin</button>
                 </form>
               </details>
 
@@ -518,7 +711,7 @@ export default async function ContratosPage({ searchParams }: Props) {
                 <summary>Gastos internos</summary>
                 <form action={addExpenseAction} className="mini-form" style={{ marginTop: "0.6rem" }}>
                   <input type="hidden" name="contractId" value={loadedContract.id} />
-                  <select name="category" defaultValue="PEAJE" disabled={!canWrite}>
+                  <select name="category" defaultValue="PEAJE" disabled={!canWrite || loadedContractLocked}>
                     <option value="PEAJE">Peaje</option>
                     <option value="GASOLINA">Gasolina</option>
                     <option value="COMIDA">Comida</option>
@@ -526,11 +719,11 @@ export default async function ContratosPage({ searchParams }: Props) {
                     <option value="LAVADO">Lavado</option>
                     <option value="OTRO">Otro</option>
                   </select>
-                  <input name="amount" type="number" step="0.01" placeholder="Importe" disabled={!canWrite} />
-                  <input name="vehiclePlate" placeholder="Matrícula" defaultValue={loadedContract.vehiclePlate} disabled={!canWrite} />
-                  <input name="expenseDate" type="date" disabled={!canWrite} />
-                  <input name="note" placeholder="Nota" disabled={!canWrite} />
-                  <button className="secondary-btn" type="submit" disabled={!canWrite}>Añadir gasto</button>
+                  <input name="amount" type="number" step="0.01" placeholder="Importe" disabled={!canWrite || loadedContractLocked} />
+                  <input name="vehiclePlate" placeholder="Matrícula" defaultValue={loadedContract.vehiclePlate} disabled={!canWrite || loadedContractLocked} />
+                  <input name="expenseDate" type="date" disabled={!canWrite || loadedContractLocked} />
+                  <input name="note" placeholder="Nota" disabled={!canWrite || loadedContractLocked} />
+                  <button className="secondary-btn" type="submit" disabled={!canWrite || loadedContractLocked}>Añadir gasto</button>
                 </form>
               </details>
 
@@ -539,7 +732,7 @@ export default async function ContratosPage({ searchParams }: Props) {
                 <form action={closeContractAction} className="mini-form" style={{ marginTop: "0.6rem" }}>
                   <input type="hidden" name="contractId" value={loadedContract.id} />
                   <p className="muted-text">Sin caja hecha no se puede cerrar.</p>
-                  <button className="primary-btn" type="submit" disabled={!canWrite || loadedContract.status === "CERRADO" || !loadedContract.cashRecord}>Cerrar contrato</button>
+                  <button className="primary-btn" type="submit" disabled={!canWrite || loadedContractLocked || !loadedContract.cashRecord}>Cerrar contrato</button>
                   <p className="muted-text">Factura: {loadedDetail?.invoice?.invoiceNumber || "Sin factura"}</p>
                 </form>
               </details>
@@ -551,7 +744,6 @@ export default async function ContratosPage({ searchParams }: Props) {
       {tab === "historico" ? (
         <section className="card stack-sm">
           <div className="table-header-row">
-            <h3>Histórico de contratos</h3>
             <a className="secondary-btn text-center" href="/api/contratos/preimpresion">Preimpresión contrato</a>
           </div>
           <form method="GET" className="inline-search">
@@ -610,24 +802,27 @@ export default async function ContratosPage({ searchParams }: Props) {
                         <a className="secondary-btn text-center" href={`/contratos?tab=gestion&contractId=${contract.id}`}>Abrir</a>
                         <a className="secondary-btn text-center" href={`/api/contratos/${contract.id}/pdf`}>Imprimir</a>
                         <a className="secondary-btn text-center" href={`/contratos?tab=historico&from=${from}&to=${to}&q=${encodeURIComponent(q)}&auditContractId=${contract.id}`}>Auditoría</a>
-                        <details>
-                          <summary>Editar / Borrar</summary>
-                          <form action={updateContractAction} className="mini-form" style={{ marginTop: "0.5rem" }}>
-                            <input type="hidden" name="contractId" value={contract.id} />
-                            <input name="customerName" defaultValue={contract.customerName} placeholder="Cliente" />
-                            <input name="deliveryAt" type="datetime-local" defaultValue={contract.deliveryAt.slice(0, 16)} />
-                            <input name="pickupAt" type="datetime-local" defaultValue={contract.pickupAt.slice(0, 16)} />
-                            <input name="billedCarGroup" defaultValue={contract.billedCarGroup} placeholder="Grupo" />
-                            <input name="totalSettlement" type="number" step="0.01" defaultValue={contract.totalSettlement.toFixed(2)} />
-                            <button className="secondary-btn" type="submit" disabled={!canWrite || contract.status === "CERRADO"}>Guardar</button>
-                          </form>
-                          <form action={deleteContractAction} className="mini-form" style={{ marginTop: "0.5rem" }}>
-                            <input type="hidden" name="contractId" value={contract.id} />
-                            <button className="secondary-btn" type="submit" disabled={!canWrite || contract.status === "CERRADO" || Boolean(contract.invoiceId)}>
-                              {contract.status === "CERRADO" || contract.invoiceId ? "No borrable" : "Borrar"}
-                            </button>
-                          </form>
-                        </details>
+                        {canWrite ? (
+                          <details>
+                            <summary>Editar / Borrar</summary>
+                            <form action={updateContractAction} className="mini-form" style={{ marginTop: "0.5rem" }}>
+                              <input type="hidden" name="contractId" value={contract.id} />
+                              <input name="customerName" defaultValue={contract.customerName} placeholder="Cliente" disabled={contract.status === "CERRADO" || Boolean(contract.invoiceId)} />
+                              <input name="deliveryAt" type="datetime-local" defaultValue={contract.deliveryAt.slice(0, 16)} disabled={contract.status === "CERRADO" || Boolean(contract.invoiceId)} />
+                              <input name="pickupAt" type="datetime-local" defaultValue={contract.pickupAt.slice(0, 16)} disabled={contract.status === "CERRADO" || Boolean(contract.invoiceId)} />
+                              <input name="billedCarGroup" defaultValue={contract.billedCarGroup} placeholder="Grupo" disabled={contract.status === "CERRADO" || Boolean(contract.invoiceId)} />
+                              <input name="totalSettlement" type="number" step="0.01" defaultValue={contract.totalSettlement.toFixed(2)} disabled={contract.status === "CERRADO" || Boolean(contract.invoiceId)} />
+                              <button className="secondary-btn" type="submit" disabled={contract.status === "CERRADO" || Boolean(contract.invoiceId)}>Guardar</button>
+                            </form>
+                            <form action={deleteContractAction} className="mini-form" style={{ marginTop: "0.5rem" }}>
+                              <input type="hidden" name="contractId" value={contract.id} />
+                              <button className="secondary-btn" type="submit" disabled={contract.status === "CERRADO" || Boolean(contract.invoiceId)}>
+                                {contract.status === "CERRADO" || contract.invoiceId ? "No borrable" : "Borrar"}
+                              </button>
+                            </form>
+                            {contract.invoiceId ? <p className="danger-text">Contrato facturado: sin edición.</p> : null}
+                          </details>
+                        ) : null}
                       </td>
                     </tr>
                   ))
@@ -668,7 +863,6 @@ export default async function ContratosPage({ searchParams }: Props) {
 
       {tab === "localizar" ? (
         <section className="card stack-sm">
-          <h3>Localizar contrato</h3>
           <form method="GET" className="inline-search">
             <input type="hidden" name="tab" value="localizar" />
             <input name="contractNumber" defaultValue={contractNumber} placeholder="Nº contrato" />
@@ -698,7 +892,7 @@ export default async function ContratosPage({ searchParams }: Props) {
                       <td>{contract.status}</td>
                       <td>{contract.totalSettlement.toFixed(2)}</td>
                       <td className="inline-actions-cell">
-                        <a className="secondary-btn text-center" href={`/contratos?tab=gestion&contractId=${contract.id}`}>Abrir gestión</a>
+                        <a className="secondary-btn text-center" href={`/contratos?tab=gestion&contractId=${contract.id}&contractNumber=${encodeURIComponent(contract.contractNumber)}`}>Abrir gestión</a>
                         <a className="secondary-btn text-center" href={`/api/contratos/${contract.id}/pdf`}>Imprimir</a>
                         <a className="secondary-btn text-center" href={`/contratos?tab=historico&auditContractId=${contract.id}`}>Auditoría</a>
                         <a className="secondary-btn text-center" href={`/contratos?tab=cambio&changeContractId=${contract.id}`}>Cambio vehículo</a>
@@ -720,7 +914,6 @@ export default async function ContratosPage({ searchParams }: Props) {
 
       {tab === "cambio" ? (
         <section className="card stack-sm">
-          <h3>Cambio de vehículo</h3>
           <form method="GET" className="inline-search">
             <input type="hidden" name="tab" value="cambio" />
             <select name="changeContractId" defaultValue={selectedChangeContract?.id ?? ""}>
@@ -767,7 +960,6 @@ export default async function ContratosPage({ searchParams }: Props) {
 
       {tab === "renumerar" ? (
         <section className="card stack-sm">
-          <h3>Renumerar contrato</h3>
           <form method="GET" className="inline-search">
             <input type="hidden" name="tab" value="renumerar" />
             <select name="renumberContractId" defaultValue={selectedRenumberContract?.id ?? ""}>
@@ -803,7 +995,6 @@ export default async function ContratosPage({ searchParams }: Props) {
 
       {tab === "asignacion" ? (
         <section className="card stack-sm">
-          <h3>Asignación de matrículas</h3>
           <form method="GET" className="inline-search">
             <input type="hidden" name="tab" value="asignacion" />
             <select name="assignContractId" defaultValue={selectedAssignContract?.id ?? ""}>
@@ -875,7 +1066,6 @@ export default async function ContratosPage({ searchParams }: Props) {
 
       {tab === "informes" ? (
         <section className="card stack-sm">
-          <h3>Informes de contratos</h3>
           <form method="GET" className="inline-search">
             <input type="hidden" name="tab" value="informes" />
             <input name="reportQ" defaultValue={reportQ} placeholder="Contrato / cliente / matrícula" />

@@ -1,3 +1,4 @@
+// Endpoint HTTP de reporting/gastos/export.
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { listDailyOperationalExpenses } from "@/lib/services/rental-service";

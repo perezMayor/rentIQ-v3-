@@ -5,7 +5,7 @@ import path from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
 
 const PORT = 3213;
-const BASE_URL = `http://127.0.0.1:${PORT}`;
+const BASE_URL = `http://localhost:${PORT}`;
 
 async function waitForServer(url: string, timeoutMs: number) {
   const deadline = Date.now() + timeoutMs;
@@ -21,12 +21,14 @@ async function waitForServer(url: string, timeoutMs: number) {
 
 async function run() {
   const dataDir = await mkdtemp(path.join(os.tmpdir(), "rentiq-auth-flow-"));
+  const distDirAbs = await mkdtemp(path.join(process.cwd(), ".next-auth-dist-"));
+  const distDir = path.basename(distDirAbs);
   const child = spawn(
     process.execPath,
     ["node_modules/next/dist/bin/next", "dev", "--port", String(PORT)],
     {
       cwd: process.cwd(),
-      env: { ...process.env, RENTIQ_DATA_DIR: dataDir, NEXT_TELEMETRY_DISABLED: "1" },
+      env: { ...process.env, RENTIQ_DATA_DIR: dataDir, NEXT_DIST_DIR: distDir, NEXT_TELEMETRY_DISABLED: "1" },
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
@@ -34,7 +36,10 @@ async function run() {
   try {
     await waitForServer(BASE_URL, 30_000);
 
-    const loginPayload = new URLSearchParams({ role: "ADMIN" });
+    const loginPayload = new URLSearchParams({
+      email: "admin@rentiq.local",
+      password: "Admin#2026",
+    });
     const loginRes = await fetch(`${BASE_URL}/api/login`, {
       method: "POST",
       body: loginPayload,
@@ -44,7 +49,7 @@ async function run() {
     assert.equal(loginRes.status, 303);
     assert.ok((loginRes.headers.get("location") ?? "").endsWith("/dashboard"));
     const setCookie = loginRes.headers.get("set-cookie") ?? "";
-    assert.ok(setCookie.includes("rq_v3_session=u-admin"));
+    assert.ok(setCookie.includes("rq_v3_session=u-admin"), "cookie de sesión no contiene usuario admin");
 
     const cookie = setCookie.split(";")[0];
     const dashboardRes = await fetch(`${BASE_URL}/dashboard`, { headers: { cookie }, redirect: "manual" });
@@ -68,6 +73,7 @@ async function run() {
     child.kill("SIGTERM");
     await new Promise((resolve) => setTimeout(resolve, 400));
     await rm(dataDir, { recursive: true, force: true });
+    await rm(distDirAbs, { recursive: true, force: true });
   }
 }
 

@@ -1,3 +1,4 @@
+// Módulo seed-demo.mts.
 import {
   closeContract,
   convertReservationToContract,

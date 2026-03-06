@@ -1,3 +1,4 @@
+// Página del módulo gestor.
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getSessionUser } from "@/lib/auth";
@@ -13,6 +14,7 @@ import {
   deleteTariffPlan,
   deleteTemplate,
   getCompanySettings,
+  importTariffCatalogFromCsv,
   listUserAccounts,
   listActiveRentalPlatesByDate,
   listDailyOperationalExpenses,
@@ -29,8 +31,13 @@ import {
   upsertTariffPrice,
   validateDailyOperationalExpenses,
 } from "@/lib/services/rental-service";
+import { TEMPLATE_MACRO_GROUPS } from "@/lib/services/template-macro-catalog";
+import { getTemplatePresetHtml } from "@/lib/services/template-presets";
+import styles from "./gestor.module.css";
+import { ModuleHelp } from "@/components/module-help";
 
 type GestorTab = "usuarios" | "sucursales" | "tarifas" | "gastos" | "plantillas" | "backups";
+type BranchEditorView = "general" | "horarios";
 
 type Props = {
   searchParams: Promise<{
@@ -48,6 +55,11 @@ type Props = {
     expenseDate?: string;
     qTemplate?: string;
     qUser?: string;
+    view?: string;
+    branchCode?: string;
+    branchView?: string;
+    branchCodeDraft?: string;
+    branchNameDraft?: string;
   }>;
 };
 
@@ -65,6 +77,47 @@ function getDefaultRange() {
   return { from: from.toISOString().slice(0, 10), to: now.toISOString().slice(0, 10) };
 }
 
+function serializeBranchesRaw(rows: Array<{ code: string; name: string }>) {
+  return rows.map((item) => `${item.code}|${item.name}`).join("\n");
+}
+
+const WEEKLY_DAY_FIELDS = [
+  { key: "monday", label: "Lunes" },
+  { key: "tuesday", label: "Martes" },
+  { key: "wednesday", label: "Miércoles" },
+  { key: "thursday", label: "Jueves" },
+  { key: "friday", label: "Viernes" },
+  { key: "saturday", label: "Sábado" },
+  { key: "sunday", label: "Domingo" },
+] as const;
+const PERIOD_OPTIONS = ["POR DEFECTO", "VERANO", "INVIERNO", "FESTIVOS", "OPERATIVO"] as const;
+
+function defaultBranchSchedule(actorId: string) {
+  const nowIso = new Date().toISOString();
+  return {
+    periodLabel: "POR DEFECTO",
+    timezone: "Europe/Madrid",
+    language: "es",
+    weekly: {
+      monday: { enabled: true, start1: "08:00", end1: "13:00", start2: "16:00", end2: "20:00" },
+      tuesday: { enabled: true, start1: "08:00", end1: "13:00", start2: "16:00", end2: "20:00" },
+      wednesday: { enabled: true, start1: "08:00", end1: "13:00", start2: "16:00", end2: "20:00" },
+      thursday: { enabled: true, start1: "08:00", end1: "13:00", start2: "16:00", end2: "20:00" },
+      friday: { enabled: true, start1: "08:00", end1: "13:00", start2: "16:00", end2: "20:00" },
+      saturday: { enabled: true, start1: "08:00", end1: "13:00", start2: "16:00", end2: "20:00" },
+      sunday: { enabled: false, start1: "08:00", end1: "13:00", start2: "16:00", end2: "20:00" },
+    },
+    exceptions: [],
+    updatedAt: nowIso,
+    updatedBy: actorId,
+  };
+}
+
+function normalizeTime(input: string, fallback: string) {
+  const value = input.trim();
+  return /^\d{2}:\d{2}$/.test(value) ? value : fallback;
+}
+
 export default async function GestorPage({ searchParams }: Props) {
   const user = await getSessionUser();
   if (!user) redirect("/login");
@@ -75,6 +128,27 @@ export default async function GestorPage({ searchParams }: Props) {
   const isSuperAdmin = user.role === "SUPER_ADMIN";
 
   const settings = await getCompanySettings();
+  const selectedBranchCode = (params.branchCode ?? "").trim().toUpperCase() || settings.branches[0]?.code || "";
+  const branchView: BranchEditorView = params.branchView === "horarios" ? "horarios" : "general";
+  const selectedBranch = settings.branches.find((item) => item.code === selectedBranchCode) ?? null;
+  const draftBranchCode = params.branchCodeDraft ?? selectedBranch?.code ?? "";
+  const draftBranchName = params.branchNameDraft ?? selectedBranch?.name ?? "";
+  const selectedBranchSchedule =
+    selectedBranchCode && settings.branchSchedules?.[selectedBranchCode]
+      ? settings.branchSchedules[selectedBranchCode]
+      : defaultBranchSchedule(user.id);
+  const exceptionRows = Array.from({ length: Math.max(8, selectedBranchSchedule.exceptions.length + 2) }).map((_, index) => {
+    const item = selectedBranchSchedule.exceptions[index];
+    return {
+      date: item?.date ?? "",
+      mode: item?.mode ?? "ABIERTA",
+      start1: item?.start1 ?? "08:00",
+      end1: item?.end1 ?? "13:00",
+      start2: item?.start2 ?? "16:00",
+      end2: item?.end2 ?? "20:00",
+      note: item?.note ?? "",
+    };
+  });
 
   const qBackup = (params.qBackup ?? "").trim().toLowerCase();
   const page = Math.max(1, Number(params.page ?? "1") || 1);
@@ -106,7 +180,13 @@ export default async function GestorPage({ searchParams }: Props) {
   const expensesValidation = await validateDailyOperationalExpenses({ from, to });
 
   const qTemplate = params.qTemplate ?? "";
+  const panelView = params.view === "amplia" ? "amplia" : "compacta";
+  const panelColumns = panelView === "compacta" ? "minmax(0,1fr) minmax(0,1fr)" : "1fr";
+  const panelMinHeight = panelView === "compacta" ? "430px" : "auto";
+  const panelMaxHeight = panelView === "compacta" ? "430px" : "none";
+  const panelScroll = panelView === "compacta" ? "auto" : "visible";
   const templates = await listTemplates(qTemplate);
+  const templatesInUse = (await listTemplates("")).filter((item) => item.active);
   const qUser = params.qUser ?? "";
   const users = await listUserAccounts(qUser);
 
@@ -125,6 +205,153 @@ export default async function GestorPage({ searchParams }: Props) {
     } catch (error) {
       const message = error instanceof Error ? error.message : "Error guardando configuración";
       redirect(`/gestor?tab=sucursales&error=${encodeURIComponent(message)}`);
+    }
+  }
+
+  async function upsertBranchAction(formData: FormData) {
+    "use server";
+    const actor = await getSessionUser();
+    if (!actor) redirect("/login");
+    if (actor.role === "LECTOR") redirect("/gestor?tab=sucursales&error=Permiso+denegado");
+
+    const code = String(formData.get("branchCode") ?? "").trim().toUpperCase();
+    const name = String(formData.get("branchName") ?? "").trim();
+
+    if (!code) {
+      redirect("/gestor?tab=sucursales&error=El+código+de+la+sucursal+es+obligatorio");
+    }
+    if (!name) {
+      redirect(`/gestor?tab=sucursales&branchCodeDraft=${encodeURIComponent(code)}&error=El+nombre+de+la+sucursal+es+obligatorio`);
+    }
+
+    const current = await getCompanySettings();
+    const next = current.branches.filter((item) => item.code !== code);
+    next.push({ code, name });
+    next.sort((a, b) => a.code.localeCompare(b.code));
+
+    try {
+      await updateCompanySettings({ branchesRaw: serializeBranchesRaw(next) }, { id: actor.id, role: actor.role });
+      revalidatePath("/gestor");
+      redirect(`/gestor?tab=sucursales&branchCode=${encodeURIComponent(code)}&ok=${encodeURIComponent("Sucursal guardada")}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Error guardando sucursal";
+      redirect(`/gestor?tab=sucursales&branchCodeDraft=${encodeURIComponent(code)}&branchNameDraft=${encodeURIComponent(name)}&error=${encodeURIComponent(message)}`);
+    }
+  }
+
+  async function deleteBranchAction(formData: FormData) {
+    "use server";
+    const actor = await getSessionUser();
+    if (!actor) redirect("/login");
+    if (actor.role === "LECTOR") redirect("/gestor?tab=sucursales&error=Permiso+denegado");
+
+    const code = String(formData.get("branchCode") ?? "").trim().toUpperCase();
+    if (!code) {
+      redirect("/gestor?tab=sucursales&error=Debes+indicar+la+sucursal+a+eliminar");
+    }
+
+    const current = await getCompanySettings();
+    const next = current.branches.filter((item) => item.code !== code);
+    if (next.length === current.branches.length) {
+      redirect("/gestor?tab=sucursales&error=Sucursal+no+encontrada");
+    }
+
+    try {
+      await updateCompanySettings({ branchesRaw: serializeBranchesRaw(next) }, { id: actor.id, role: actor.role });
+      revalidatePath("/gestor");
+      const nextCode = next[0]?.code ?? "";
+      redirect(`/gestor?tab=sucursales${nextCode ? `&branchCode=${encodeURIComponent(nextCode)}` : ""}&ok=${encodeURIComponent("Sucursal eliminada")}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Error eliminando sucursal";
+      redirect(`/gestor?tab=sucursales&branchCode=${encodeURIComponent(code)}&error=${encodeURIComponent(message)}`);
+    }
+  }
+
+  async function saveBranchScheduleAction(formData: FormData) {
+    "use server";
+    const actor = await getSessionUser();
+    if (!actor) redirect("/login");
+    if (actor.role === "LECTOR") redirect("/gestor?tab=sucursales&error=Permiso+denegado");
+
+    const branchCode = String(formData.get("branchCode") ?? "").trim().toUpperCase();
+    if (!branchCode) {
+      redirect("/gestor?tab=sucursales&branchView=horarios&error=Selecciona+una+sucursal");
+    }
+
+    const current = await getCompanySettings();
+    const base = current.branchSchedules?.[branchCode] ?? defaultBranchSchedule(actor.id);
+    const weekly = { ...base.weekly };
+    for (const day of WEEKLY_DAY_FIELDS) {
+      const previous = base.weekly[day.key];
+      weekly[day.key] = {
+        enabled: formData.get(`${day.key}_enabled`) === "on",
+        start1: normalizeTime(String(formData.get(`${day.key}_start1`) ?? previous.start1), previous.start1),
+        end1: normalizeTime(String(formData.get(`${day.key}_end1`) ?? previous.end1), previous.end1),
+        start2: normalizeTime(String(formData.get(`${day.key}_start2`) ?? previous.start2), previous.start2),
+        end2: normalizeTime(String(formData.get(`${day.key}_end2`) ?? previous.end2), previous.end2),
+      };
+    }
+
+    const exceptionDates = formData.getAll("exceptionDate").map((value) => String(value ?? "").trim());
+    const exceptionModes = formData.getAll("exceptionMode").map((value) => String(value ?? "").trim().toUpperCase());
+    const exceptionStart1 = formData.getAll("exceptionStart1").map((value) => String(value ?? "").trim());
+    const exceptionEnd1 = formData.getAll("exceptionEnd1").map((value) => String(value ?? "").trim());
+    const exceptionStart2 = formData.getAll("exceptionStart2").map((value) => String(value ?? "").trim());
+    const exceptionEnd2 = formData.getAll("exceptionEnd2").map((value) => String(value ?? "").trim());
+    const exceptionNote = formData.getAll("exceptionNote").map((value) => String(value ?? "").trim());
+
+    const maxRows = Math.max(
+      exceptionDates.length,
+      exceptionModes.length,
+      exceptionStart1.length,
+      exceptionEnd1.length,
+      exceptionStart2.length,
+      exceptionEnd2.length,
+      exceptionNote.length,
+    );
+
+    const exceptions = Array.from({ length: maxRows })
+      .map((_, index) => {
+        const date = exceptionDates[index] ?? "";
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+        const mode = exceptionModes[index] === "CERRADA" ? "CERRADA" : "ABIERTA";
+        return {
+          date,
+          mode,
+          start1: normalizeTime(exceptionStart1[index] ?? "08:00", "08:00"),
+          end1: normalizeTime(exceptionEnd1[index] ?? "13:00", "13:00"),
+          start2: normalizeTime(exceptionStart2[index] ?? "16:00", "16:00"),
+          end2: normalizeTime(exceptionEnd2[index] ?? "20:00", "20:00"),
+          note: exceptionNote[index] ?? "",
+        };
+      })
+      .filter((item): item is NonNullable<typeof item> => item !== null)
+      .toSorted((a, b) => a.date.localeCompare(b.date));
+
+    const nextSchedules = {
+      ...(current.branchSchedules ?? {}),
+      [branchCode]: {
+        periodLabel: String(formData.get("periodLabel") ?? base.periodLabel).trim() || base.periodLabel,
+        timezone: String(formData.get("timezone") ?? base.timezone).trim() || base.timezone,
+        language: String(formData.get("language") ?? base.language).trim() || base.language,
+        weekly,
+        exceptions,
+        updatedAt: new Date().toISOString(),
+        updatedBy: actor.id,
+      },
+    };
+
+    try {
+      await updateCompanySettings({ branchSchedulesRaw: JSON.stringify(nextSchedules) }, { id: actor.id, role: actor.role });
+      revalidatePath("/gestor");
+      redirect(
+        `/gestor?tab=sucursales&branchCode=${encodeURIComponent(branchCode)}&branchView=horarios&ok=${encodeURIComponent("Horarios guardados")}`,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Error guardando horarios";
+      redirect(
+        `/gestor?tab=sucursales&branchCode=${encodeURIComponent(branchCode)}&branchView=horarios&error=${encodeURIComponent(message)}`,
+      );
     }
   }
 
@@ -207,6 +434,34 @@ export default async function GestorPage({ searchParams }: Props) {
       redirect("/gestor?tab=tarifas&ok=Tarifa+creada");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Error creando tarifa";
+      redirect(`/gestor?tab=tarifas&error=${encodeURIComponent(message)}`);
+    }
+  }
+
+  async function importTariffCsvAction(formData: FormData) {
+    "use server";
+    const actor = await getSessionUser();
+    if (!actor) redirect("/login");
+    if (actor.role === "LECTOR") redirect("/gestor?tab=tarifas&error=Permiso+denegado");
+    const csvFile = formData.get("tariffCsvFile");
+    if (!(csvFile instanceof File) || csvFile.size === 0) {
+      redirect("/gestor?tab=tarifas&error=Debes+adjuntar+un+CSV");
+    }
+    if (csvFile.size > 4 * 1024 * 1024) {
+      redirect("/gestor?tab=tarifas&error=CSV+demasiado+grande+(max+4MB)");
+    }
+    try {
+      const csvRaw = Buffer.from(await csvFile.arrayBuffer()).toString("utf8");
+      const result = await importTariffCatalogFromCsv(csvRaw, { id: actor.id, role: actor.role });
+      revalidatePath("/gestor");
+      revalidatePath("/tarifas");
+      redirect(
+        `/gestor?tab=tarifas&ok=${encodeURIComponent(
+          `Importación OK: filas ${result.rows}, planes +${result.plansCreated}/${result.plansUpdated} act., tramos +${result.bracketsCreated}/${result.bracketsUpdated} act., precios +${result.pricesCreated}/${result.pricesUpdated} act.`,
+        )}`,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Error importando tarifas";
       redirect(`/gestor?tab=tarifas&error=${encodeURIComponent(message)}`);
     }
   }
@@ -417,6 +672,38 @@ export default async function GestorPage({ searchParams }: Props) {
     }
   }
 
+  async function createTemplatePresetAction(formData: FormData) {
+    "use server";
+    const actor = await getSessionUser();
+    if (!actor) redirect("/login");
+    if (actor.role === "LECTOR") redirect("/gestor?tab=plantillas&error=Permiso+denegado");
+    const templateCode = String(formData.get("templateCode") ?? "").trim();
+    const templateType = String(formData.get("templateType") ?? "CONFIRMACION_RESERVA").trim().toUpperCase();
+    const language = String(formData.get("language") ?? "es").trim().toLowerCase();
+    const title = String(formData.get("title") ?? "").trim();
+    try {
+      await createTemplate(
+        {
+          templateCode,
+          templateType,
+          language,
+          title,
+          htmlContent: getTemplatePresetHtml(
+            templateType as "CONTRATO" | "CONFIRMACION_RESERVA" | "FACTURA",
+            language,
+          ),
+        },
+        { id: actor.id, role: actor.role },
+      );
+      revalidatePath("/gestor");
+      revalidatePath("/plantillas");
+      redirect(`/gestor?tab=plantillas&qTemplate=${encodeURIComponent(qTemplate)}&ok=Plantilla+base+creada`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Error creando plantilla base";
+      redirect(`/gestor?tab=plantillas&qTemplate=${encodeURIComponent(qTemplate)}&error=${encodeURIComponent(message)}`);
+    }
+  }
+
   async function forceBackupAction() {
     "use server";
     const actor = await getSessionUser();
@@ -453,18 +740,22 @@ export default async function GestorPage({ searchParams }: Props) {
       redirect(`/gestor?tab=backups&error=${encodeURIComponent(message)}`);
     }
   }
+  const helpByTab: Record<GestorTab, string[]> = {
+    usuarios: ["Crea usuarios por rol.", "Activa/desactiva cuentas.", "Audita cambios críticos."],
+    sucursales: ["Configura datos generales.", "Define horarios y excepciones.", "Guarda cambios."],
+    tarifas: ["Ajusta tramos y matriz.", "Valida importes.", "Publica tarifa activa."],
+    gastos: ["Consulta diario contable.", "Filtra por fecha/vehículo.", "Corrige incidencias."],
+    plantillas: ["Edita plantillas.", "Comprueba resultado.", "Publica versión final."],
+    backups: ["Genera backup.", "Revisa histórico.", "Restaura con doble confirmación."],
+  };
 
   return (
     <div className="stack-lg">
-      <header className="stack-sm">
-        <h2>Gestor</h2>
-      </header>
-
       {params.error ? <p className="danger-text">{params.error}</p> : null}
       {params.ok ? <p>{params.ok}</p> : null}
 
       <section className="card stack-sm">
-        <div className="inline-actions-cell">
+        <div className="table-header-row tab-nav-grid">
           <a className={tab === "usuarios" ? "primary-btn text-center" : "secondary-btn text-center"} href="/gestor?tab=usuarios">Usuarios</a>
           <a className={tab === "sucursales" ? "primary-btn text-center" : "secondary-btn text-center"} href="/gestor?tab=sucursales">Sucursales</a>
           <a className={tab === "tarifas" ? "primary-btn text-center" : "secondary-btn text-center"} href="/gestor?tab=tarifas">Tarifas</a>
@@ -473,6 +764,7 @@ export default async function GestorPage({ searchParams }: Props) {
           <a className={tab === "backups" ? "primary-btn text-center" : "secondary-btn text-center"} href="/gestor?tab=backups">Backups</a>
         </div>
       </section>
+      <ModuleHelp title="Ayuda rápida de Gestor" steps={helpByTab[tab]} />
 
       {tab === "usuarios" ? (
         <>
@@ -572,41 +864,210 @@ export default async function GestorPage({ searchParams }: Props) {
       ) : null}
 
       {tab === "sucursales" ? (
-        <section className="card stack-sm">
-          <h3>Sucursales</h3>
-          <form action={saveCompanySettingsAction} className="form-grid">
-            <label className="col-span-2">
-              Sucursales (1 por línea: CODIGO|NOMBRE)
-              <textarea name="branchesRaw" rows={8} defaultValue={settings.branches.map((branch) => `${branch.code}|${branch.name}`).join("\n")} />
-            </label>
-            <input type="hidden" name="companyName" value={settings.companyName} readOnly />
-            <input type="hidden" name="companyEmailFrom" value={settings.companyEmailFrom} readOnly />
-            <input type="hidden" name="taxId" value={settings.taxId} readOnly />
-            <input type="hidden" name="fiscalAddress" value={settings.fiscalAddress} readOnly />
-            <input type="hidden" name="defaultIvaPercent" value={String(settings.defaultIvaPercent)} readOnly />
-            <input type="hidden" name="backupRetentionDays" value={String(settings.backupRetentionDays)} readOnly />
-            <input type="hidden" name="invoiceSeriesF" value={settings.invoiceSeriesByType.F} readOnly />
-            <input type="hidden" name="invoiceSeriesR" value={settings.invoiceSeriesByType.R} readOnly />
-            <input type="hidden" name="invoiceSeriesV" value={settings.invoiceSeriesByType.V} readOnly />
-            <input type="hidden" name="invoiceSeriesA" value={settings.invoiceSeriesByType.A} readOnly />
-            <input type="hidden" name="providersRaw" value={(settings.providers ?? []).join("\n")} readOnly />
-            <div className="col-span-2">
-              <button className="primary-btn" type="submit">Guardar sucursales</button>
+        <section className={`card ${styles.branchControl}`}>
+          <div className={styles.branchSidebar}>
+            <div className={styles.branchSidebarHeader}>
+              <h3>Control de sucursales</h3>
+              <a className="secondary-btn text-center" href="/gestor?tab=sucursales&branchCodeDraft=&branchNameDraft=">Nueva</a>
             </div>
-          </form>
-          <div className="table-wrap">
-            <table className="data-table">
-              <thead><tr><th>Código</th><th>Nombre</th></tr></thead>
-              <tbody>
-                {settings.branches.length === 0 ? (
-                  <tr><td colSpan={2} className="muted-text">Sin sucursales.</td></tr>
+            <nav className={styles.branchTree} aria-label="Listado de sucursales">
+              {settings.branches.length === 0 ? (
+                <p className="muted-text">Sin sucursales configuradas.</p>
+              ) : (
+                settings.branches.map((branchItem) => {
+                  const active = selectedBranchCode === branchItem.code;
+                  return (
+                    <a
+                      key={branchItem.code}
+                      href={`/gestor?tab=sucursales&branchCode=${encodeURIComponent(branchItem.code)}`}
+                      className={active ? styles.branchTreeItemActive : styles.branchTreeItem}
+                    >
+                      <span>{branchItem.code}</span>
+                      <strong>{branchItem.name}</strong>
+                    </a>
+                  );
+                })
+              )}
+            </nav>
+          </div>
+
+          <div className={styles.branchEditor}>
+            <div className={styles.branchTabs}>
+              <a
+                href={`/gestor?tab=sucursales${selectedBranchCode ? `&branchCode=${encodeURIComponent(selectedBranchCode)}` : ""}&branchView=general`}
+                className={branchView === "general" ? styles.branchTabActive : styles.branchTabInactive}
+              >
+                General
+              </a>
+              <a
+                href={`/gestor?tab=sucursales${selectedBranchCode ? `&branchCode=${encodeURIComponent(selectedBranchCode)}` : ""}&branchView=horarios`}
+                className={branchView === "horarios" ? styles.branchTabActive : styles.branchTabInactive}
+              >
+                Horarios
+              </a>
+            </div>
+
+            {branchView === "general" ? (
+              <>
+                <form action={upsertBranchAction} className={styles.branchForm}>
+                  <label>
+                    Código
+                    <input
+                      name="branchCode"
+                      defaultValue={draftBranchCode}
+                      placeholder="ALC"
+                      maxLength={8}
+                      required
+                    />
+                  </label>
+                  <label className={styles.branchFormWide}>
+                    Nombre de sucursal
+                    <input
+                      name="branchName"
+                      defaultValue={draftBranchName}
+                      placeholder="OFICINA PRINCIPAL LA MANGA"
+                      required
+                    />
+                  </label>
+                  <div className={styles.branchActions}>
+                    <button className="primary-btn" type="submit">Guardar sucursal</button>
+                  </div>
+                </form>
+                {selectedBranch ? (
+                  <form action={deleteBranchAction} className={styles.branchDeleteForm}>
+                    <input type="hidden" name="branchCode" value={selectedBranch.code} />
+                    <button className="secondary-btn" type="submit">Baja sucursal</button>
+                  </form>
+                ) : null}
+
+                <p className="muted-text">
+                  Este sistema actualmente guarda sucursales con dos campos: código y nombre.
+                </p>
+
+                <details>
+                  <summary>Edición masiva (CODIGO|NOMBRE)</summary>
+                  <form action={saveCompanySettingsAction} className="stack-sm" style={{ marginTop: "0.5rem" }}>
+                    <textarea
+                      name="branchesRaw"
+                      rows={7}
+                      defaultValue={settings.branches.map((branch) => `${branch.code}|${branch.name}`).join("\n")}
+                    />
+                    <button className="secondary-btn" type="submit">Guardar listado completo</button>
+                  </form>
+                </details>
+              </>
+            ) : (
+              <>
+                {selectedBranch ? (
+                  <form action={saveBranchScheduleAction} className={styles.branchScheduleForm}>
+                    <input type="hidden" name="branchCode" value={selectedBranch.code} />
+                    <div className={styles.branchScheduleMeta}>
+                      <label>
+                        Período
+                        <select name="periodLabel" defaultValue={selectedBranchSchedule.periodLabel}>
+                          {PERIOD_OPTIONS.map((option) => (
+                            <option key={option} value={option}>
+                              {option}
+                            </option>
+                          ))}
+                          {!PERIOD_OPTIONS.includes(selectedBranchSchedule.periodLabel as (typeof PERIOD_OPTIONS)[number]) ? (
+                            <option value={selectedBranchSchedule.periodLabel}>{selectedBranchSchedule.periodLabel}</option>
+                          ) : null}
+                        </select>
+                      </label>
+                      <label>
+                        Zona horaria
+                        <select name="timezone" defaultValue={selectedBranchSchedule.timezone}>
+                          <option value="Europe/Madrid">Europe/Madrid</option>
+                          <option value="Europe/Lisbon">Europe/Lisbon</option>
+                          <option value="Atlantic/Canary">Atlantic/Canary</option>
+                          <option value="UTC">UTC</option>
+                        </select>
+                      </label>
+                      <label>
+                        Idioma
+                        <select name="language" defaultValue={selectedBranchSchedule.language}>
+                          <option value="es">Español</option>
+                          <option value="en">English</option>
+                          <option value="fr">Français</option>
+                          <option value="de">Deutsch</option>
+                        </select>
+                      </label>
+                    </div>
+                    <div className="table-wrap">
+                      <table className={styles.branchScheduleTable}>
+                        <thead>
+                          <tr>
+                            <th>Día</th>
+                            <th>Activo</th>
+                            <th>Mañana inicio</th>
+                            <th>Mañana fin</th>
+                            <th>Tarde inicio</th>
+                            <th>Tarde fin</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {WEEKLY_DAY_FIELDS.map((day) => {
+                            const row = selectedBranchSchedule.weekly[day.key];
+                            return (
+                              <tr key={day.key}>
+                                <td>{day.label}</td>
+                                <td><input type="checkbox" name={`${day.key}_enabled`} defaultChecked={row.enabled} /></td>
+                                <td><input type="time" name={`${day.key}_start1`} defaultValue={row.start1} /></td>
+                                <td><input type="time" name={`${day.key}_end1`} defaultValue={row.end1} /></td>
+                                <td><input type="time" name={`${day.key}_start2`} defaultValue={row.start2} /></td>
+                                <td><input type="time" name={`${day.key}_end2`} defaultValue={row.end2} /></td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div className="stack-sm">
+                      <h4>Excepciones por calendario</h4>
+                      <div className="table-wrap">
+                        <table className={styles.branchScheduleTable}>
+                          <thead>
+                            <tr>
+                              <th>Fecha</th>
+                              <th>Modo</th>
+                              <th>Inicio mañana</th>
+                              <th>Fin mañana</th>
+                              <th>Inicio tarde</th>
+                              <th>Fin tarde</th>
+                              <th>Nota</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {exceptionRows.map((row, index) => (
+                              <tr key={`exception-${index}`}>
+                                <td><input type="date" name="exceptionDate" defaultValue={row.date} /></td>
+                                <td>
+                                  <select name="exceptionMode" defaultValue={row.mode}>
+                                    <option value="ABIERTA">Abierta</option>
+                                    <option value="CERRADA">Cerrada</option>
+                                  </select>
+                                </td>
+                                <td><input type="time" name="exceptionStart1" defaultValue={row.start1} /></td>
+                                <td><input type="time" name="exceptionEnd1" defaultValue={row.end1} /></td>
+                                <td><input type="time" name="exceptionStart2" defaultValue={row.start2} /></td>
+                                <td><input type="time" name="exceptionEnd2" defaultValue={row.end2} /></td>
+                                <td><input name="exceptionNote" defaultValue={row.note} placeholder="Opcional" /></td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                    <div className={styles.branchActions}>
+                      <button className="primary-btn" type="submit">Guardar horarios</button>
+                    </div>
+                  </form>
                 ) : (
-                  settings.branches.map((branchItem) => (
-                    <tr key={branchItem.code}><td>{branchItem.code}</td><td>{branchItem.name}</td></tr>
-                  ))
+                  <p className="muted-text">Selecciona o crea una sucursal para configurar sus horarios.</p>
                 )}
-              </tbody>
-            </table>
+              </>
+            )}
           </div>
         </section>
       ) : null}
@@ -752,6 +1213,14 @@ export default async function GestorPage({ searchParams }: Props) {
               </section>
             </>
           ) : null}
+
+          <section className="card stack-sm">
+            <h3>Importar tarifas (CSV estándar)</h3>
+            <form action={importTariffCsvAction} className="inline-search import-compact">
+              <input name="tariffCsvFile" type="file" accept=".csv,text/csv" required />
+              <button className="secondary-btn" type="submit">Importar CSV</button>
+            </form>
+          </section>
         </>
       ) : null}
 
@@ -864,59 +1333,48 @@ export default async function GestorPage({ searchParams }: Props) {
 
       {tab === "plantillas" ? (
         <>
-          <section className="card stack-md">
-            <h3>Nueva plantilla</h3>
-            <form action={createTemplateAction} className="form-grid">
-              <label>Código plantilla<input name="templateCode" placeholder="CTR_BASE" /></label>
-              <label>
-                Tipo
-                <select name="templateType" defaultValue="CONTRATO">
-                  <option value="CONTRATO">Contrato</option>
-                  <option value="CONFIRMACION_RESERVA">Confirmación reserva</option>
-                  <option value="FACTURA">Factura</option>
-                </select>
-              </label>
-              <label>Idioma<input name="language" placeholder="es" /></label>
-              <label>Título<input name="title" placeholder="Contrato base ES" /></label>
-              <label className="col-span-2">HTML<textarea name="htmlContent" rows={8} defaultValue={'<section><h1>{{company_name}}</h1><p>Contrato {{contract_number}}</p></section>'} /></label>
-              <div className="col-span-2"><button className="primary-btn" type="submit">Guardar plantilla</button></div>
-            </form>
+          <section className="card stack-sm">
+            <div className="table-header-row">
+              <a className="primary-btn text-center" href="/plantillas?mode=new">Nueva plantilla</a>
+              <a className="secondary-btn text-center" href="/plantillas">Abrir gestor de plantillas</a>
+            </div>
           </section>
 
           <section className="card stack-sm">
-            <div className="table-header-row">
-              <h3>Listado plantillas</h3>
-              <form method="GET" className="inline-search">
-                <input type="hidden" name="tab" value="plantillas" />
-                <input name="qTemplate" defaultValue={qTemplate} placeholder="código, tipo, idioma..." />
-                <button className="secondary-btn" type="submit">Buscar</button>
-              </form>
-            </div>
-            {templates.length === 0 ? (
-              <p className="muted-text">Sin plantillas.</p>
+            <h3>Plantillas en uso</h3>
+            {templatesInUse.length === 0 ? (
+              <p className="muted-text">No hay plantillas activas.</p>
             ) : (
-              <div className="stack-md">
-                {templates.map((template) => (
-                  <details key={template.id} className="card">
-                    <summary>{template.templateCode} | {template.templateType} | {template.language} | {template.active ? "Activa" : "Inactiva"}</summary>
-                    <form action={updateTemplateAction} className="stack-sm" style={{ marginTop: "0.75rem" }}>
-                      <input type="hidden" name="templateId" value={template.id} />
-                      <label>Título<input name="title" defaultValue={template.title} /></label>
-                      <label>Idioma<input name="language" defaultValue={template.language} /></label>
-                      <label>Activa<select name="active" defaultValue={template.active ? "true" : "false"}><option value="true">Sí</option><option value="false">No</option></select></label>
-                      <label>HTML<textarea name="htmlContent" defaultValue={template.htmlContent} rows={10} /></label>
-                      <button className="secondary-btn" type="submit">Actualizar</button>
-                    </form>
-                    <form action={deleteTemplateAction} className="stack-sm" style={{ marginTop: "0.75rem" }}>
-                      <input type="hidden" name="templateId" value={template.id} />
-                      <button className="secondary-btn" type="submit">Borrar plantilla</button>
-                    </form>
-                    <details style={{ marginTop: "0.5rem" }}>
-                      <summary>Vista previa HTML</summary>
-                      <div className="html-preview" dangerouslySetInnerHTML={{ __html: template.htmlContent }} />
-                    </details>
-                  </details>
-                ))}
+              <div className="table-wrap">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Código</th>
+                      <th>Tipo</th>
+                      <th>Idioma</th>
+                      <th>Título</th>
+                      <th>Acción</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {templatesInUse.map((template) => (
+                      <tr key={template.id}>
+                        <td>{template.templateCode}</td>
+                        <td>{template.templateType}</td>
+                        <td>{template.language.toUpperCase()}</td>
+                        <td>{template.title}</td>
+                        <td>
+                          <a
+                            className="secondary-btn text-center"
+                            href={`/plantillas?code=${encodeURIComponent(template.templateCode)}&language=${encodeURIComponent(template.language)}`}
+                          >
+                            Modificar
+                          </a>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             )}
           </section>

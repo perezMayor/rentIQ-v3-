@@ -1,3 +1,4 @@
+// Módulo validate-data.mts.
 import { validateDataIntegrity } from "@/lib/services/rental-service";
 
 async function main() {

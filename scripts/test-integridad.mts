@@ -1,3 +1,4 @@
+// Módulo test-integridad.mts.
 import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
@@ -219,9 +220,12 @@ async function seedBrokenData() {
   data.invoices = [
     {
       id: "inv-1",
-      invoiceNumber: "F26-ALC-00001",
+      invoiceNumber: "F00000001",
       invoiceName: "Factura 1",
+      sourceType: "CONTRATO",
+      invoiceType: "F",
       contractId: "ctr-missing",
+      sourceInvoiceId: null,
       issuedAt: new Date().toISOString(),
       baseAmount: 0,
       extrasAmount: 0,
@@ -230,6 +234,14 @@ async function seedBrokenData() {
       ivaPercent: 21,
       ivaAmount: 0,
       totalAmount: 0,
+      manualCustomerName: "",
+      manualCustomerTaxId: "",
+      manualCustomerAddress: "",
+      manualCustomerEmail: "",
+      manualLanguage: "",
+      status: "BORRADOR",
+      finalizedAt: null,
+      finalizedBy: "",
       sentLog: [],
     },
   ];

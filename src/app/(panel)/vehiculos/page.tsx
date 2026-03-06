@@ -1,3 +1,4 @@
+// Página del módulo vehiculos.
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getSessionUser } from "@/lib/auth";
@@ -13,6 +14,7 @@ import {
   getReservationForecast,
   getCompanySettings,
   getVehicleProductionSummary,
+  importVehiclesFromCsv,
   listContracts,
   listFleetVehicles,
   listReservations,
@@ -38,6 +40,7 @@ type Props = {
     listTo?: string;
     limitDate?: string;
     listType?: string;
+    ok?: string;
   }>;
 };
 
@@ -67,6 +70,7 @@ const TABS: Array<{ key: TabKey; label: string }> = [
 export default async function VehiculosPage({ searchParams }: Props) {
   const user = await getSessionUser();
   if (!user) redirect("/login");
+  if (user.role === "LECTOR") redirect("/dashboard");
 
   const params = await searchParams;
   const canWrite = user.role !== "LECTOR";
@@ -326,6 +330,33 @@ export default async function VehiculosPage({ searchParams }: Props) {
     }
   }
 
+  async function importVehiclesCsvAction(formData: FormData) {
+    "use server";
+    const actor = await getSessionUser();
+    if (!actor) redirect("/login");
+    if (actor.role === "LECTOR") redirect("/vehiculos?tab=altas-bajas&error=Permiso+denegado");
+    const csvFile = formData.get("vehiclesCsvFile");
+    if (!(csvFile instanceof File) || csvFile.size === 0) {
+      redirect("/vehiculos?tab=altas-bajas&error=Debes+adjuntar+un+CSV");
+    }
+    if (csvFile.size > 4 * 1024 * 1024) {
+      redirect("/vehiculos?tab=altas-bajas&error=CSV+demasiado+grande+(max+4MB)");
+    }
+    try {
+      const csvRaw = Buffer.from(await csvFile.arrayBuffer()).toString("utf8");
+      const result = await importVehiclesFromCsv(csvRaw, { id: actor.id, role: actor.role });
+      revalidatePath("/vehiculos");
+      redirect(
+        `/vehiculos?tab=altas-bajas&ok=${encodeURIComponent(
+          `Importación OK: filas ${result.rows}, categorías +${result.categoriesCreated}/${result.categoriesUpdated} act., modelos +${result.modelsCreated}/${result.modelsUpdated} act., flota +${result.fleetCreated}/${result.fleetUpdated} act.`,
+        )}`,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Error importando vehículos";
+      redirect(`/vehiculos?tab=altas-bajas&error=${encodeURIComponent(message)}`);
+    }
+  }
+
   const reservations = await listReservations("");
   const contracts = await listContracts("");
 
@@ -412,16 +443,10 @@ export default async function VehiculosPage({ searchParams }: Props) {
 
   return (
     <div className="stack-lg">
-      <header className="stack-sm">
-        <h2>Vehículos</h2>
-        <p className="muted-text">Módulo por pestañas exclusivas: una abierta y el resto cerradas.</p>
-      </header>
-
       {params.error ? <p className="danger-text">{params.error}</p> : null}
-      {!canWrite ? <p className="danger-text">Modo lectura: no puedes modificar datos.</p> : null}
-
+      {params.ok ? <p>{params.ok}</p> : null}
       <section className="card stack-sm">
-        <div className="inline-actions-cell">
+        <div className="table-header-row">
           {TABS.map((item) => (
             <a
               key={item.key}
@@ -725,6 +750,14 @@ export default async function VehiculosPage({ searchParams }: Props) {
                 </tbody>
               </table>
             </div>
+          </section>
+
+          <section className="card stack-sm">
+            <h3>Importación por archivo (CSV estándar)</h3>
+            <form action={importVehiclesCsvAction} className="inline-search import-compact">
+              <input name="vehiclesCsvFile" type="file" accept=".csv,text/csv" required disabled={!canWrite} />
+              <button className="secondary-btn" type="submit" disabled={!canWrite}>Importar CSV</button>
+            </form>
           </section>
         </section>
       ) : null}

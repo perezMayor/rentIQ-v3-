@@ -1,3 +1,4 @@
+// Utilidad compartida del dominio RentIQ (company-brand).
 import type { CompanySettings } from "@/lib/domain/rental";
 
 export function getDocumentCompanyName(settings: CompanySettings): string {

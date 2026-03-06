@@ -13,7 +13,7 @@ export function LogoutButton() {
   };
 
   return (
-    <button className="secondary-btn" onClick={onLogout}>
+    <button className="secondary-btn sidebar-logout-btn" onClick={onLogout}>
       Cerrar sesión
     </button>
   );

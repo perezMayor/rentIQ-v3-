@@ -8,6 +8,9 @@ export async function GET(_: Request, context: { params: Promise<{ invoiceId: st
   if (!user) {
     return NextResponse.json({ error: "No autenticado" }, { status: 401 });
   }
+  if (user.role === "LECTOR") {
+    return NextResponse.json({ error: "Permiso denegado" }, { status: 403 });
+  }
 
   const { invoiceId } = await context.params;
 

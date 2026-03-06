@@ -12,7 +12,10 @@
     "validate:data": "tsx scripts/validate-data.mts",
     "validate:audit": "tsx scripts/validate-audit-coverage.mts",
     "test:auth": "tsx scripts/test-auth-flow.mts",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
     "test:flujo-core": "tsx scripts/test-flujo-core.mts",
+    "test:tarifas": "tsx scripts/test-tarifas.mts",
     "test:audit-suppress": "tsx scripts/test-audit-suppress.mts",
     "test:gastos": "tsx scripts/test-gastos.mts",
     "test:backup": "tsx scripts/test-backup.mts",
@@ -29,6 +32,7 @@
     "styled-jsx": "5.1.7"
   },
   "devDependencies": {
+    "@playwright/test": "^1.58.2",
     "@types/node": "^20",
     "@types/nodemailer": "^7.0.11",
     "@types/pdfkit": "^0.17.5",

@@ -1,3 +1,4 @@
+// Endpoint HTTP de reservas/[reservationId]/confirmacion/download.
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { buildReservationConfirmationDocument } from "@/lib/services/reservation-confirmation-document-service";

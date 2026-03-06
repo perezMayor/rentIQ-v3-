@@ -1,3 +1,4 @@
+// Página del módulo reservas.
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getSessionUser } from "@/lib/auth";
@@ -21,6 +22,9 @@ import {
   sendReservationConfirmation,
 } from "@/lib/services/rental-service";
 import { ReservationForm } from "@/app/(panel)/reservas/reservation-form";
+import { ModuleHelp } from "@/components/module-help";
+import { withActionLock } from "@/lib/action-lock";
+import { getActionErrorMessage } from "@/lib/action-errors";
 
 type ReservasTab = "gestion" | "entregas" | "recogidas" | "localizar" | "canales" | "logs" | "planning" | "informes";
 type PlanningSubTab = "principal" | "asignacion" | "bloqueos" | "resumen" | "detalle";
@@ -86,6 +90,13 @@ function normalizeTab(value: string): ReservasTab {
   return "gestion";
 }
 
+function allowedTabsByRole(role: string): ReservasTab[] {
+  if (role === "LECTOR") {
+    return ["gestion", "entregas", "recogidas", "localizar"];
+  }
+  return ["gestion", "entregas", "recogidas", "localizar", "canales", "logs", "planning", "informes"];
+}
+
 function normalizePlanningSubtab(value: string): PlanningSubTab {
   if (value === "asignacion" || value === "bloqueos" || value === "resumen" || value === "detalle") {
     return value;
@@ -124,7 +135,9 @@ export default async function ReservasPage({ searchParams }: Props) {
   if (!user) redirect("/login");
 
   const params = await searchParams;
-  const tab = normalizeTab((params.tab ?? "gestion").toLowerCase());
+  const requestedTab = normalizeTab((params.tab ?? "gestion").toLowerCase());
+  const allowedTabs = allowedTabsByRole(user.role);
+  const tab = allowedTabs.includes(requestedTab) ? requestedTab : allowedTabs[0];
   const canWrite = user.role !== "LECTOR";
   const today = new Date().toISOString().slice(0, 10);
   const range30 = defaultDateRange(30);
@@ -321,6 +334,16 @@ export default async function ReservasPage({ searchParams }: Props) {
   const planningItems = planning.flatMap((group) => group.models.flatMap((model) => model.rows.flatMap((row) => row.items)));
   const selectedPlanningItem = planningItems.find((item) => item.id === planningSelected) ?? null;
   const planningQueryBase = `planningStart=${encodeURIComponent(planningStart)}&planningPeriod=${planningPeriod}&planningPlate=${encodeURIComponent(planningPlate)}&planningGroup=${encodeURIComponent(planningGroup)}&planningModel=${encodeURIComponent(planningModel)}`;
+  const helpByTab: Record<ReservasTab, string[]> = {
+    gestion: ["Busca o crea cliente.", "Completa tramo y condiciones.", "Guarda la reserva."],
+    entregas: ["Filtra por fecha/sucursal.", "Abre la reserva.", "Valida estado y matrícula."],
+    recogidas: ["Filtra por fecha.", "Revisa contrato y matrícula.", "Gestiona incidencias desde reserva."],
+    localizar: ["Busca por nº, cliente o matrícula.", "Abre gestión.", "Escala a contrato si aplica."],
+    canales: ["Revisa distribución.", "Actualiza rango.", "Valida importes por canal."],
+    logs: ["Filtra periodo.", "Revisa estado del envío.", "Reenvía si es necesario."],
+    planning: ["Ajusta rango.", "Detecta solapes.", "Abre elemento para corregir."],
+    informes: ["Define filtros.", "Valida resultados.", "Exporta reporte."],
+  };
 
   async function createReservationAction(formData: FormData) {
     "use server";
@@ -329,11 +352,20 @@ export default async function ReservasPage({ searchParams }: Props) {
     if (actor.role === "LECTOR") redirect("/reservas?tab=gestion&error=Permiso+denegado");
     const input = Object.fromEntries(formData.entries()) as Record<string, string>;
     try {
-      await createReservation(input, { id: actor.id, role: actor.role });
+      const lockKey = [
+        "reservation:create",
+        actor.id,
+        input.customerId ?? input.customerName ?? "",
+        input.deliveryAt ?? "",
+        input.pickupAt ?? "",
+      ].join("|");
+      await withActionLock(lockKey, async () => {
+        await createReservation(input, { id: actor.id, role: actor.role });
+      });
       revalidatePath("/reservas");
-      redirect("/reservas?tab=gestion");
+      redirect("/reservas?tab=gestion&ok=Reserva+creada");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error al crear reserva";
+      const message = getActionErrorMessage(error, "Error al crear reserva");
       redirect(`/reservas?tab=gestion&error=${encodeURIComponent(message)}`);
     }
   }
@@ -359,12 +391,14 @@ export default async function ReservasPage({ searchParams }: Props) {
       redirect("/reservas?tab=gestion&error=Solo+se+pueden+contratar+reservas+confirmadas");
     }
     try {
-      await convertReservationToContract(reservation.id, { id: actor.id, role: actor.role }, { overrideAccepted: "false", overrideReason: "" });
+      await withActionLock(`reservation:to-contract:${actor.id}:${reservation.id}`, async () => {
+        await convertReservationToContract(reservation.id, { id: actor.id, role: actor.role }, { overrideAccepted: "false", overrideReason: "" });
+      });
       revalidatePath("/reservas");
       revalidatePath("/contratos");
       redirect("/contratos?tab=gestion");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error al generar contrato";
+      const message = getActionErrorMessage(error, "Error al generar contrato");
       redirect(`/reservas?tab=gestion&error=${encodeURIComponent(message)}`);
     }
   }
@@ -445,73 +479,77 @@ export default async function ReservasPage({ searchParams }: Props) {
 
   return (
     <div className="stack-lg">
-      <header className="stack-sm">
-        <h2>Reservas</h2>
-      </header>
-
       {params.error ? <p className="danger-text">{params.error}</p> : null}
 
       <section className="card stack-sm">
-        <div className="inline-actions-cell">
+        <div className="table-header-row tab-nav-grid">
           <a className={tab === "gestion" ? "primary-btn text-center" : "secondary-btn text-center"} href="/reservas?tab=gestion">Gestión de reserva</a>
           <a className={tab === "entregas" ? "primary-btn text-center" : "secondary-btn text-center"} href="/reservas?tab=entregas">Entregas</a>
           <a className={tab === "recogidas" ? "primary-btn text-center" : "secondary-btn text-center"} href="/reservas?tab=recogidas">Recogidas</a>
           <a className={tab === "localizar" ? "primary-btn text-center" : "secondary-btn text-center"} href="/reservas?tab=localizar">Localizar reserva</a>
-          <a className={tab === "canales" ? "primary-btn text-center" : "secondary-btn text-center"} href="/reservas?tab=canales">Canales</a>
-          <a className={tab === "logs" ? "primary-btn text-center" : "secondary-btn text-center"} href="/reservas?tab=logs">Log confirmaciones</a>
-          <a className="secondary-btn text-center" href={planningDirectUrl}>Planning</a>
-          <a className={tab === "informes" ? "primary-btn text-center" : "secondary-btn text-center"} href="/reservas?tab=informes">Informes de reserva</a>
+          {allowedTabs.includes("canales") ? <a className={tab === "canales" ? "primary-btn text-center" : "secondary-btn text-center"} href="/reservas?tab=canales">Canales</a> : null}
+          {allowedTabs.includes("logs") ? <a className={tab === "logs" ? "primary-btn text-center" : "secondary-btn text-center"} href="/reservas?tab=logs">Log confirmaciones</a> : null}
+          {allowedTabs.includes("planning") ? <a className="secondary-btn text-center" href={planningDirectUrl}>Planning</a> : null}
+          {allowedTabs.includes("informes") ? <a className={tab === "informes" ? "primary-btn text-center" : "secondary-btn text-center"} href="/reservas?tab=informes">Informes de reserva</a> : null}
         </div>
       </section>
+      <ModuleHelp title="Ayuda rápida de Reservas" steps={helpByTab[tab]} />
 
       {tab === "gestion" ? (
         <>
           <section className="card stack-md">
-            <h3>Gestión de reserva</h3>
-            {!canWrite ? <p className="danger-text">Modo lectura: no puedes crear reservas.</p> : null}
-            <ReservationForm
-              action={createReservationAction}
-              canWrite={canWrite}
-              initialClient={
-                prefillClient
-                  ? {
-                      id: prefillClient.id,
-                      clientCode: prefillClient.clientCode,
-                      clientType: prefillClient.clientType,
-                      firstName: prefillClient.firstName,
-                      lastName: prefillClient.lastName,
-                      companyName: prefillClient.companyName,
-                      commissionerName: prefillClient.commissionerName,
-                      documentNumber: prefillClient.documentNumber,
-                      licenseNumber: prefillClient.licenseNumber,
-                      email: prefillClient.email,
-                      phone1: prefillClient.phone1,
-                      acquisitionChannel: prefillClient.acquisitionChannel,
-                    }
-                  : null
-              }
-              tariffOptions={tariffPlans.map((plan) => ({ id: plan.id, code: plan.code, title: plan.title }))}
-              clients={clients.map((client) => ({
-                id: client.id,
-                clientCode: client.clientCode,
-                clientType: client.clientType,
-                firstName: client.firstName,
-                lastName: client.lastName,
-                companyName: client.companyName,
-                commissionerName: client.commissionerName,
-                documentNumber: client.documentNumber,
-                licenseNumber: client.licenseNumber,
-                email: client.email,
-                phone1: client.phone1,
-                acquisitionChannel: client.acquisitionChannel,
-              }))}
-              vehicles={fleet.map((vehicle) => ({
-                plate: vehicle.plate,
-                groupLabel: vehicle.categoryLabel.split(" - ")[0] || vehicle.categoryLabel,
-              }))}
-              salesChannels={salesChannels}
-              extraOptions={vehicleExtras.filter((item) => item.active)}
-            />
+            <div className="inline-search">
+              <input
+                value={selectedGestionReservation?.reservationNumber ?? ""}
+                placeholder="Nº reserva (se muestra al crear/cargar)"
+                readOnly
+              />
+            </div>
+            {canWrite ? (
+              <ReservationForm
+                action={createReservationAction}
+                canWrite={canWrite}
+                initialClient={
+                  prefillClient
+                    ? {
+                        id: prefillClient.id,
+                        clientCode: prefillClient.clientCode,
+                        clientType: prefillClient.clientType,
+                        firstName: prefillClient.firstName,
+                        lastName: prefillClient.lastName,
+                        companyName: prefillClient.companyName,
+                        commissionerName: prefillClient.commissionerName,
+                        documentNumber: prefillClient.documentNumber,
+                        licenseNumber: prefillClient.licenseNumber,
+                        email: prefillClient.email,
+                        phone1: prefillClient.phone1,
+                        acquisitionChannel: prefillClient.acquisitionChannel,
+                      }
+                    : null
+                }
+                tariffOptions={tariffPlans.map((plan) => ({ id: plan.id, code: plan.code, title: plan.title }))}
+                clients={clients.map((client) => ({
+                  id: client.id,
+                  clientCode: client.clientCode,
+                  clientType: client.clientType,
+                  firstName: client.firstName,
+                  lastName: client.lastName,
+                  companyName: client.companyName,
+                  commissionerName: client.commissionerName,
+                  documentNumber: client.documentNumber,
+                  licenseNumber: client.licenseNumber,
+                  email: client.email,
+                  phone1: client.phone1,
+                  acquisitionChannel: client.acquisitionChannel,
+                }))}
+                vehicles={fleet.map((vehicle) => ({
+                  plate: vehicle.plate,
+                  groupLabel: vehicle.categoryLabel.split(" - ")[0] || vehicle.categoryLabel,
+                }))}
+                salesChannels={salesChannels}
+                extraOptions={vehicleExtras.filter((item) => item.active)}
+              />
+            ) : null}
           </section>
 
           {selectedGestionReservation ? (
@@ -577,7 +615,6 @@ export default async function ReservasPage({ searchParams }: Props) {
       {tab === "entregas" ? (
         <section className="card stack-sm">
           <div className="table-header-row">
-            <h3>Entregas</h3>
             <form method="GET" className="inline-search">
               <input type="hidden" name="tab" value="entregas" />
               <input name="deliveryFrom" type="date" defaultValue={deliveryFrom} />
@@ -662,7 +699,6 @@ export default async function ReservasPage({ searchParams }: Props) {
       {tab === "localizar" ? (
         <section className="card stack-sm">
           <div className="table-header-row">
-            <h3>Localizar reserva</h3>
             <form method="GET" className="inline-search">
               <input type="hidden" name="tab" value="localizar" />
               <input name="locNumber" defaultValue={locNumber} placeholder="Nº reserva" />
@@ -718,7 +754,6 @@ export default async function ReservasPage({ searchParams }: Props) {
       {tab === "recogidas" ? (
         <section className="card stack-sm">
           <div className="table-header-row">
-            <h3>Recogidas</h3>
             <form method="GET" className="inline-search">
               <input type="hidden" name="tab" value="recogidas" />
               <input name="pickupFrom" type="date" defaultValue={pickupFrom} />
@@ -803,7 +838,6 @@ export default async function ReservasPage({ searchParams }: Props) {
       {tab === "canales" ? (
         <section className="card stack-sm">
           <div className="table-header-row">
-            <h3>Canales</h3>
             <form method="GET" className="inline-search">
               <input type="hidden" name="tab" value="canales" />
               <input name="statsFrom" type="date" defaultValue={statsFrom} />
@@ -878,7 +912,6 @@ export default async function ReservasPage({ searchParams }: Props) {
       {tab === "logs" ? (
         <section className="card stack-sm">
           <div className="table-header-row">
-            <h3>Log de confirmaciones</h3>
             <form method="GET" className="inline-search">
               <input type="hidden" name="tab" value="logs" />
               <input name="logFrom" type="date" defaultValue={logFrom} />
@@ -921,7 +954,6 @@ export default async function ReservasPage({ searchParams }: Props) {
       {(tab as string) === "planning" ? (
         <section className="card stack-sm">
           <div className="table-header-row">
-            <h3>Planning</h3>
             <form method="GET" className="inline-search">
               <input type="hidden" name="tab" value="planning" />
               <input type="hidden" name="planningSubtab" value={planningSubtab} />
@@ -945,7 +977,7 @@ export default async function ReservasPage({ searchParams }: Props) {
               </a>
             </form>
           </div>
-          <div className="inline-actions-cell">
+          <div className="table-header-row">
             <a className={planningSubtab === "principal" ? "primary-btn text-center" : "secondary-btn text-center"} href={`/reservas?tab=planning&planningSubtab=principal&${planningQueryBase}`}>Calendario</a>
             <a className={planningSubtab === "asignacion" ? "primary-btn text-center" : "secondary-btn text-center"} href={`/reservas?tab=planning&planningSubtab=asignacion&${planningQueryBase}`}>Asignación</a>
             <a className={planningSubtab === "bloqueos" ? "primary-btn text-center" : "secondary-btn text-center"} href={`/reservas?tab=planning&planningSubtab=bloqueos&${planningQueryBase}`}>Bloqueos</a>
@@ -988,7 +1020,6 @@ export default async function ReservasPage({ searchParams }: Props) {
           {planningSubtab === "asignacion" ? (
             <section className="card stack-md">
               <h4>Asignación manual de matrícula</h4>
-              {!canWrite ? <p className="danger-text">Modo lectura: no puedes asignar.</p> : null}
               <form action={assignPlateAction} className="planning-form-grid">
                 <label>
                   Reserva sin matrícula
@@ -1049,7 +1080,6 @@ export default async function ReservasPage({ searchParams }: Props) {
           {planningSubtab === "bloqueos" ? (
             <section className="card stack-md">
               <h4>Bloqueo manual de vehículo</h4>
-              {!canWrite ? <p className="danger-text">Modo lectura: no puedes bloquear.</p> : null}
               <form action={createBlockAction} className="planning-form-grid">
                 <label>
                   Matrícula
@@ -1149,7 +1179,6 @@ export default async function ReservasPage({ searchParams }: Props) {
       {tab === "informes" ? (
         <section className="card stack-sm">
           <div className="table-header-row">
-            <h3>Informes de reserva</h3>
             <form method="GET" className="inline-search">
               <input type="hidden" name="tab" value="informes" />
               <select name="reportDateField" defaultValue={reportDateField}>

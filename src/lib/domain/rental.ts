@@ -130,12 +130,18 @@ export type Contract = {
   checkOutFuelLevel: string;
   checkOutNotes: string;
   checkOutPhotos: string;
+  checkOutSignatureName: string;
+  checkOutSignatureHash: string;
+  checkOutSignatureDevice: string;
   checkInAt: string | null;
   checkInBy: string;
   checkInKm: number;
   checkInFuelLevel: string;
   checkInNotes: string;
   checkInPhotos: string;
+  checkInSignatureName: string;
+  checkInSignatureHash: string;
+  checkInSignatureDevice: string;
   createdAt: string;
   createdBy: string;
   closedAt: string | null;
@@ -165,7 +171,10 @@ export type Invoice = {
   id: string;
   invoiceNumber: string;
   invoiceName: string;
-  contractId: string;
+  sourceType: "CONTRATO" | "MANUAL";
+  invoiceType: "F" | "V" | "R" | "A";
+  contractId: string | null;
+  sourceInvoiceId: string | null;
   issuedAt: string;
   baseAmount: number;
   extrasAmount: number;
@@ -174,6 +183,14 @@ export type Invoice = {
   ivaPercent: number;
   ivaAmount: number;
   totalAmount: number;
+  manualCustomerName: string;
+  manualCustomerTaxId: string;
+  manualCustomerAddress: string;
+  manualCustomerEmail: string;
+  manualLanguage: string;
+  status: "BORRADOR" | "FINAL";
+  finalizedAt: string | null;
+  finalizedBy: string;
   sentLog: Array<{ sentAt: string; sentBy: string; to: string; status: "ENVIADA" | "ERROR" }>;
 };
 
@@ -390,6 +407,42 @@ export type CompanyBranch = {
   name: string;
 };
 
+export type BranchScheduleDay = {
+  enabled: boolean;
+  start1: string;
+  end1: string;
+  start2: string;
+  end2: string;
+};
+
+export type BranchScheduleException = {
+  date: string;
+  mode: "ABIERTA" | "CERRADA";
+  start1: string;
+  end1: string;
+  start2: string;
+  end2: string;
+  note: string;
+};
+
+export type BranchScheduleConfig = {
+  periodLabel: string;
+  timezone: string;
+  language: string;
+  weekly: {
+    monday: BranchScheduleDay;
+    tuesday: BranchScheduleDay;
+    wednesday: BranchScheduleDay;
+    thursday: BranchScheduleDay;
+    friday: BranchScheduleDay;
+    saturday: BranchScheduleDay;
+    sunday: BranchScheduleDay;
+  };
+  exceptions: BranchScheduleException[];
+  updatedAt: string;
+  updatedBy: string;
+};
+
 export type UserAccount = {
   id: string;
   name: string;
@@ -414,6 +467,9 @@ export type CompanySettings = {
   taxId: string;
   fiscalAddress: string;
   documentFooter: string;
+  contractFrontFooter: string;
+  contractBackContent: string;
+  contractBackContentType: "TEXT" | "HTML";
   logoDataUrl: string;
   brandPrimaryColor: string;
   brandSecondaryColor: string;
@@ -427,9 +483,11 @@ export type CompanySettings = {
     V: string;
     A: string;
   };
+  invoiceNumberScope: "GLOBAL" | "BRANCH";
   branches: CompanyBranch[];
+  branchSchedules: Record<string, BranchScheduleConfig>;
   contractNumberPattern: "aa-sucursal-numero";
-  invoiceNumberPattern: "aa-sucursal-numero";
+  invoiceNumberPattern: "serie-digitos-global" | "serie-digitos-sucursal";
   updatedAt: string;
   updatedBy: string;
 };

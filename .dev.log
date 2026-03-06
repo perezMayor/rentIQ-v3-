@@ -1,0 +1,1208 @@
+
+> rentiq-gestion-v3@0.1.0 dev
+> node node_modules/next/dist/bin/next dev --port 3203
+
+▲ Next.js 16.1.6 (Turbopack)
+- Local:         http://localhost:3203
+- Network:       http://192.168.18.62:3203
+
+✓ Starting...
+✓ Ready in 334ms
+ GET /login 200 in 1085ms (compile: 1016ms, render: 69ms)
+ HEAD / 307 in 149ms (compile: 133ms, render: 16ms)
+ GET /dashboard 307 in 678ms (compile: 297ms, render: 382ms)
+ GET /dashboard 307 in 64ms (compile: 3ms, render: 62ms)
+ GET /dashboard?metric=entregas 200 in 67ms (compile: 5ms, render: 62ms)
+ GET /reservas 200 in 306ms (compile: 265ms, render: 42ms)
+ GET /contratos 200 in 249ms (compile: 230ms, render: 20ms)
+ GET /vehiculos 200 in 219ms (compile: 191ms, render: 28ms)
+ GET /clientes 200 in 265ms (compile: 245ms, render: 19ms)
+ GET /facturacion 200 in 658ms (compile: 592ms, render: 66ms)
+ GET /gestor 200 in 205ms (compile: 176ms, render: 29ms)
+ GET /ayuda 200 in 155ms (compile: 144ms, render: 12ms)
+ GET /configuracion 200 in 225ms (compile: 208ms, render: 17ms)
+ POST /api/logout 303 in 153ms (compile: 144ms, render: 9ms)
+ GET /login 200 in 17ms (compile: 1570µs, render: 15ms)
+ GET /login 200 in 6ms (compile: 1016µs, render: 5ms)
+ GET /login 200 in 7ms (compile: 836µs, render: 6ms)
+✓ Compiled in 5ms
+✓ Compiled in 6ms
+⨯ Error: ENOENT: no such file or directory, open '/Users/javierperez/Desktop/rentiq_gestion_V3/.next/dev/server/pages-manifest.json'
+    at ignore-listed frames {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/Users/javierperez/Desktop/rentiq_gestion_V3/.next/dev/server/pages-manifest.json',
+  page: '/login'
+}
+⨯ Error: ENOENT: no such file or directory, open '/Users/javierperez/Desktop/rentiq_gestion_V3/.next/dev/server/pages-manifest.json'
+    at ignore-listed frames {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/Users/javierperez/Desktop/rentiq_gestion_V3/.next/dev/server/pages-manifest.json',
+  page: '/login'
+}
+⨯ Error: ENOENT: no such file or directory, open '/Users/javierperez/Desktop/rentiq_gestion_V3/.next/dev/server/pages-manifest.json'
+    at ignore-listed frames {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/Users/javierperez/Desktop/rentiq_gestion_V3/.next/dev/server/pages-manifest.json',
+  page: '/login'
+}
+⨯ Error: ENOENT: no such file or directory, open '/Users/javierperez/Desktop/rentiq_gestion_V3/.next/dev/server/pages-manifest.json'
+    at ignore-listed frames {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/Users/javierperez/Desktop/rentiq_gestion_V3/.next/dev/server/pages-manifest.json',
+  page: '/login'
+}
+⨯ Error: ENOENT: no such file or directory, open '/Users/javierperez/Desktop/rentiq_gestion_V3/.next/dev/server/pages-manifest.json'
+    at ignore-listed frames {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/Users/javierperez/Desktop/rentiq_gestion_V3/.next/dev/server/pages-manifest.json',
+  page: '/login'
+}
+⨯ Error: ENOENT: no such file or directory, open '/Users/javierperez/Desktop/rentiq_gestion_V3/.next/dev/server/pages-manifest.json'
+    at ignore-listed frames {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/Users/javierperez/Desktop/rentiq_gestion_V3/.next/dev/server/pages-manifest.json',
+  page: '/login'
+}
+⨯ Error: ENOENT: no such file or directory, open '/Users/javierperez/Desktop/rentiq_gestion_V3/.next/dev/static/development/_buildManifest.js.tmp.n13w8yrz3ba'
+    at ignore-listed frames {
+  errno: -2,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: '/Users/javierperez/Desktop/rentiq_gestion_V3/.next/dev/static/development/_buildManifest.js.tmp.n13w8yrz3ba'
+}
+ GET /login 500 in 453ms (compile: 386ms, render: 67ms)
+ GET /login 500 in 454ms (compile: 437ms, render: 17ms)
+ GET /login 500 in 454ms (compile: 440ms, render: 14ms)
+ GET /login 500 in 496ms (compile: 485ms, render: 11ms)
+ GET /login 500 in 385ms (compile: 381ms, render: 4ms)
+ GET /login 500 in 533ms (compile: 438ms, render: 95ms)
+ GET /login 200 in 91ms (compile: 72ms, render: 19ms)
+ GET /login 200 in 92ms (compile: 66ms, render: 25ms)
+ GET /login 200 in 92ms (compile: 59ms, render: 33ms)
+ GET /login 200 in 92ms (compile: 53ms, render: 39ms)
+ GET /login 200 in 93ms (compile: 38ms, render: 54ms)
+ GET /login 200 in 36ms (compile: 1101µs, render: 35ms)
+✓ Compiled in 9ms
+ GET /login 200 in 42ms (compile: 6ms, render: 36ms)
+✓ Compiled in 5ms
+ GET /login 200 in 152ms (compile: 67ms, render: 85ms)
+ GET /login 200 in 152ms (compile: 87ms, render: 65ms)
+ GET /login 200 in 60ms (compile: 2ms, render: 58ms)
+ GET /login 200 in 60ms (compile: 11ms, render: 49ms)
+ GET /login 200 in 61ms (compile: 19ms, render: 42ms)
+ GET /login 200 in 54ms (compile: 1851µs, render: 52ms)
+ GET /login 200 in 52ms (compile: 3ms, render: 49ms)
+ GET /login 200 in 54ms (compile: 14ms, render: 40ms)
+ GET /login 200 in 30ms (compile: 1532µs, render: 28ms)
+ GET /login 200 in 30ms (compile: 10ms, render: 20ms)
+ GET /login 200 in 30ms (compile: 19ms, render: 11ms)
+✓ Compiled in 7ms
+✓ Compiled in 4ms
+ GET /login 200 in 185ms (compile: 62ms, render: 123ms)
+ GET /login 200 in 76ms (compile: 1975µs, render: 74ms)
+ GET /login 200 in 76ms (compile: 11ms, render: 65ms)
+ GET /login 200 in 66ms (compile: 12ms, render: 54ms)
+ GET /login 200 in 56ms (compile: 18ms, render: 38ms)
+ GET /login 200 in 40ms (compile: 14ms, render: 26ms)
+ GET /login 200 in 40ms (compile: 1254µs, render: 39ms)
+ GET /login 200 in 32ms (compile: 1536µs, render: 30ms)
+ GET /login 200 in 31ms (compile: 14ms, render: 17ms)
+ GET /login 200 in 32ms (compile: 22ms, render: 10ms)
+ GET /login 200 in 32ms (compile: 8ms, render: 24ms)
+✓ Compiled in 4ms
+✓ Compiled in 5ms
+ GET /login 200 in 107ms (compile: 61ms, render: 46ms)
+✓ Compiled in 3ms
+✓ Compiled in 3ms
+✓ Compiled in 5ms
+ GET /login 200 in 131ms (compile: 70ms, render: 61ms)
+✓ Compiled in 4ms
+✓ Compiled in 6ms
+ GET /login 200 in 140ms (compile: 74ms, render: 66ms)
+✓ Compiled in 7ms
+✓ Compiled in 4ms
+✓ Compiled in 5ms
+ GET /login 200 in 126ms (compile: 74ms, render: 52ms)
+ GET /login 200 in 42ms (compile: 7ms, render: 35ms)
+✓ Compiled in 4ms
+✓ Compiled in 6ms
+ GET /login 200 in 124ms (compile: 74ms, render: 50ms)
+ GET /login 200 in 42ms (compile: 5ms, render: 37ms)
+ GET /login 200 in 36ms (compile: 4ms, render: 32ms)
+✓ Compiled in 5ms
+✓ Compiled in 7ms
+ GET /login 200 in 116ms (compile: 69ms, render: 47ms)
+✓ Compiled in 5ms
+✓ Compiled in 9ms
+ GET /login 200 in 135ms (compile: 81ms, render: 54ms)
+ GET /login 200 in 71ms (compile: 50ms, render: 22ms)
+ GET /login 200 in 60ms (compile: 3ms, render: 57ms)
+ GET /login 200 in 55ms (compile: 3ms, render: 52ms)
+ GET /login 200 in 40ms (compile: 1610µs, render: 38ms)
+ GET /login 200 in 46ms (compile: 10ms, render: 36ms)
+ GET /login 200 in 37ms (compile: 8ms, render: 29ms)
+ GET /login 200 in 29ms (compile: 7ms, render: 22ms)
+ GET /login 200 in 36ms (compile: 8ms, render: 28ms)
+ GET /login 200 in 15ms (compile: 1400µs, render: 14ms)
+ GET /login 200 in 8ms (compile: 722µs, render: 7ms)
+✓ Compiled in 3ms
+ GET /login 200 in 49ms (compile: 1148µs, render: 48ms)
+ GET /login 200 in 39ms (compile: 1155µs, render: 37ms)
+ GET /login 200 in 31ms (compile: 8ms, render: 23ms)
+ GET /login 200 in 39ms (compile: 9ms, render: 30ms)
+ GET /login 200 in 35ms (compile: 7ms, render: 28ms)
+ GET /login 200 in 29ms (compile: 7ms, render: 22ms)
+ GET /login 200 in 25ms (compile: 1509µs, render: 23ms)
+ GET /login 200 in 14ms (compile: 1693µs, render: 13ms)
+✓ Compiled in 31ms
+ GET /login 200 in 10ms (compile: 1063µs, render: 9ms)
+✓ Compiled in 7ms
+ POST /api/login 303 in 105ms (compile: 92ms, render: 13ms)
+ GET /dashboard 200 in 562ms (compile: 77ms, render: 485ms)
+ GET /dashboard 200 in 74ms (compile: 6ms, render: 68ms)
+ GET /dashboard?metric=entregas 200 in 28ms (compile: 1863µs, render: 26ms)
+ GET /dashboard 200 in 41ms (compile: 2ms, render: 39ms)
+ GET /dashboard?metric=entregas 200 in 29ms (compile: 1842µs, render: 27ms)
+ GET /dashboard 200 in 44ms (compile: 5ms, render: 39ms)
+ GET /dashboard?metric=entregas 200 in 25ms (compile: 2ms, render: 23ms)
+ GET /dashboard?metric=entregas 200 in 72ms (compile: 4ms, render: 68ms)
+ GET /dashboard 200 in 93ms (compile: 5ms, render: 88ms)
+ GET /dashboard?metric=entregas 200 in 49ms (compile: 3ms, render: 46ms)
+ GET /dashboard 200 in 68ms (compile: 6ms, render: 63ms)
+ GET / 307 in 98ms (compile: 52ms, render: 46ms)
+ GET /dashboard 200 in 49ms (compile: 1142µs, render: 48ms)
+ GET /contratos 200 in 147ms (compile: 96ms, render: 51ms)
+ GET /contratos?tab=informes 200 in 525ms (compile: 6ms, render: 519ms)
+ GET /api/contratos/342f1929-28dc-4f3f-a3f2-c14c80d85445/pdf 400 in 846ms (compile: 835ms, render: 11ms)
+✓ Compiled in 431ms
+✓ Compiled in 449ms
+✓ Compiled in 2ms
+✓ Compiled in 23ms
+ GET /api/contratos/342f1929-28dc-4f3f-a3f2-c14c80d85445/pdf 200 in 248ms (compile: 198ms, render: 50ms)
+ GET /dashboard 200 in 155ms (compile: 94ms, render: 62ms)
+ GET /dashboard?metric=entregas 200 in 52ms (compile: 3ms, render: 49ms)
+ GET /dashboard?metric=entregas 200 in 51ms (compile: 13ms, render: 38ms)
+ POST /api/logout 303 in 40ms (compile: 30ms, render: 10ms)
+ GET /login 200 in 156ms (compile: 50ms, render: 106ms)
+ GET /login 200 in 28ms (compile: 17ms, render: 12ms)
+ GET /login 200 in 9ms (compile: 1057µs, render: 8ms)
+ POST /api/login 303 in 38ms (compile: 28ms, render: 10ms)
+ GET /dashboard 200 in 419ms (compile: 2ms, render: 417ms)
+ GET /dashboard?metric=entregas 200 in 23ms (compile: 1740µs, render: 21ms)
+ GET /reservas 200 in 134ms (compile: 95ms, render: 39ms)
+ GET /reservas?tab=entregas 200 in 459ms (compile: 8ms, render: 451ms)
+ GET /reservas?tab=recogidas 200 in 274ms (compile: 7ms, render: 267ms)
+ GET /reservas?tab=localizar 200 in 230ms (compile: 4ms, render: 226ms)
+ GET /reservas?tab=canales 200 in 375ms (compile: 4ms, render: 370ms)
+ GET /reservas?tab=logs 200 in 161ms (compile: 3ms, render: 158ms)
+ GET /planning-completo?start=2026-03-03&period=30&plate=&group=&model= 200 in 654ms (compile: 193ms, render: 461ms)
+ GET /reservas?planningStart=2026-03-03&planningPeriod=30&planningPlate=&planningGroup=&planningModel= 200 in 70ms (compile: 3ms, render: 67ms)
+ GET /reservas?tab=informes 200 in 377ms (compile: 6ms, render: 371ms)
+ GET /contratos 200 in 124ms (compile: 87ms, render: 37ms)
+ GET /contratos?tab=historico 200 in 462ms (compile: 5ms, render: 457ms)
+ GET /contratos?tab=localizar 200 in 290ms (compile: 6ms, render: 284ms)
+ GET /contratos?tab=cambio 200 in 213ms (compile: 4ms, render: 208ms)
+ GET /contratos?tab=renumerar 200 in 165ms (compile: 4ms, render: 161ms)
+ GET /contratos?tab=asignacion 200 in 162ms (compile: 5ms, render: 157ms)
+ GET /contratos?tab=informes 200 in 40ms (compile: 1420µs, render: 39ms)
+ GET /vehiculos 200 in 144ms (compile: 90ms, render: 54ms)
+ GET /vehiculos?tab=modelos 200 in 773ms (compile: 17ms, render: 756ms)
+ GET /vehiculos?tab=altas-bajas 200 in 685ms (compile: 5ms, render: 680ms)
+ GET /vehiculos?tab=listados 200 in 144ms (compile: 4ms, render: 139ms)
+ GET /vehiculos?tab=produccion 200 in 409ms (compile: 4ms, render: 405ms)
+ GET /vehiculos?tab=extras 200 in 442ms (compile: 6ms, render: 436ms)
+ GET /clientes 200 in 132ms (compile: 89ms, render: 43ms)
+ GET /clientes?tab=listado 200 in 578ms (compile: 4ms, render: 574ms)
+ GET /clientes?tab=historico 200 in 107ms (compile: 4ms, render: 103ms)
+ GET /clientes?tab=comisiones 200 in 294ms (compile: 4ms, render: 290ms)
+ GET /facturacion 200 in 209ms (compile: 140ms, render: 69ms)
+ GET /facturacion?tab=gastos&from=2026-02-01&to=2026-03-03&q=&plate= 200 in 413ms (compile: 5ms, render: 407ms)
+ GET /facturacion?tab=conciliacion&from=2026-02-01&to=2026-03-03&q=&plate= 200 in 172ms (compile: 3ms, render: 169ms)
+ GET /facturacion?tab=envios&from=2026-02-01&to=2026-03-03&q=&plate= 200 in 172ms (compile: 7ms, render: 165ms)
+ GET /facturacion?tab=kpi&from=2026-02-01&to=2026-03-03&q=&plate= 200 in 163ms (compile: 7ms, render: 156ms)
+ GET /gestor 200 in 154ms (compile: 99ms, render: 55ms)
+ GET /gestor?tab=sucursales 200 in 681ms (compile: 3ms, render: 677ms)
+ GET /gestor?tab=tarifas 200 in 905ms (compile: 7ms, render: 897ms)
+ GET /gestor?tab=gastos 200 in 536ms (compile: 7ms, render: 528ms)
+ GET /gestor?tab=plantillas 200 in 248ms (compile: 6ms, render: 242ms)
+ GET /gestor?tab=backups 200 in 264ms (compile: 8ms, render: 256ms)
+ GET /ayuda 200 in 91ms (compile: 74ms, render: 16ms)
+ GET /configuracion 200 in 148ms (compile: 98ms, render: 50ms)
+ GET /dashboard 200 in 70ms (compile: 8ms, render: 61ms)
+ GET /dashboard?metric=entregas 200 in 66ms (compile: 4ms, render: 62ms)
+ GET /dashboard?metric=entregas 200 in 66ms (compile: 19ms, render: 47ms)
+ GET /contratos 200 in 84ms (compile: 11ms, render: 73ms)
+ GET /contratos?tab=localizar 200 in 76ms (compile: 5ms, render: 71ms)
+ GET /contratos?tab=informes 200 in 73ms (compile: 4ms, render: 68ms)
+ GET /api/contratos/342f1929-28dc-4f3f-a3f2-c14c80d85445/pdf 200 in 219ms (compile: 178ms, render: 41ms)
+ GET /dashboard 200 in 105ms (compile: 15ms, render: 89ms)
+ GET /dashboard?metric=entregas 200 in 95ms (compile: 16ms, render: 79ms)
+ GET /dashboard?metric=entregas 200 in 98ms (compile: 6ms, render: 92ms)
+ GET /reservas?tab=planning 307 in 94ms (compile: 7ms, render: 87ms)
+ GET /planning-completo?start=2026-03-03&period=30&plate=&group=&model= 200 in 50ms (compile: 2ms, render: 47ms)
+ GET /reservas?planningStart=2026-03-03&planningPeriod=30&planningPlate=&planningGroup=&planningModel= 200 in 85ms (compile: 5ms, render: 80ms)
+✓ Compiled in 23ms
+✓ Compiled in 32ms
+ GET /contratos 200 in 67ms (compile: 11ms, render: 56ms)
+ GET /contratos?tab=informes 200 in 105ms (compile: 12ms, render: 93ms)
+ GET /api/contratos/342f1929-28dc-4f3f-a3f2-c14c80d85445/pdf 200 in 45ms (compile: 9ms, render: 36ms)
+✓ Compiled in 9ms
+✓ Compiled in 9ms
+ GET /reservas 200 in 186ms (compile: 120ms, render: 66ms)
+✓ Compiled in 23ms
+✓ Compiled in 10ms
+ GET /contratos 200 in 70ms (compile: 13ms, render: 58ms)
+⨯ ./src/app/favicon.ico
+Processing image failed
+unable to decode image data
+
+Caused by:
+- failed to fill whole buffer
+
+
+⨯ ./src/app/favicon.ico
+Processing image failed
+unable to decode image data
+
+Caused by:
+- failed to fill whole buffer
+
+
+⨯ ./src/app/favicon.ico
+Processing image failed
+unable to decode image data
+
+Caused by:
+- failed to fill whole buffer
+
+
+⨯ ./src/app/favicon.ico
+Processing image failed
+unable to decode image data
+
+Caused by:
+- failed to fill whole buffer
+
+
+⨯ ./src/app/favicon.ico
+Processing image failed
+unable to decode image data
+
+Caused by:
+- failed to fill whole buffer
+
+
+⨯ ./src/app/favicon.ico
+Processing image failed
+unable to decode image data
+
+Caused by:
+- failed to fill whole buffer
+
+
+ GET /contratos 500 in 576ms (compile: 531ms, render: 45ms)
+ GET /contratos 500 in 580ms (compile: 545ms, render: 35ms)
+ GET /contratos 500 in 588ms (compile: 562ms, render: 26ms)
+ GET /contratos 500 in 598ms (compile: 578ms, render: 20ms)
+ GET /contratos 500 in 599ms (compile: 588ms, render: 12ms)
+ GET /contratos 500 in 617ms (compile: 611ms, render: 6ms)
+⨯ ./src/app/favicon.ico
+Processing image failed
+unable to decode image data
+
+Caused by:
+- failed to fill whole buffer
+
+
+⨯ ./src/app/favicon.ico
+Processing image failed
+unable to decode image data
+
+Caused by:
+- failed to fill whole buffer
+
+
+⨯ ./src/app/favicon.ico
+Processing image failed
+unable to decode image data
+
+Caused by:
+- failed to fill whole buffer
+
+
+⨯ ./src/app/favicon.ico
+Processing image failed
+unable to decode image data
+
+Caused by:
+- failed to fill whole buffer
+
+
+⨯ ./src/app/favicon.ico
+Processing image failed
+unable to decode image data
+
+Caused by:
+- failed to fill whole buffer
+
+
+⨯ ./src/app/favicon.ico
+Processing image failed
+unable to decode image data
+
+Caused by:
+- failed to fill whole buffer
+
+
+ GET /contratos 200 in 269ms (compile: 91ms, render: 178ms)
+✓ Compiled in 0ms
+ GET /contratos 200 in 44ms (compile: 1569µs, render: 42ms)
+ GET /contratos 200 in 208ms (compile: 74ms, render: 134ms)
+ GET /contratos 200 in 87ms (compile: 2ms, render: 85ms)
+ GET /contratos 200 in 86ms (compile: 12ms, render: 74ms)
+ GET /contratos 200 in 76ms (compile: 20ms, render: 56ms)
+ GET /contratos 200 in 47ms (compile: 14ms, render: 33ms)
+ GET /contratos 200 in 73ms (compile: 13ms, render: 60ms)
+ GET /contratos 200 in 75ms (compile: 25ms, render: 50ms)
+ GET /contratos 200 in 75ms (compile: 11ms, render: 65ms)
+ GET /contratos 200 in 76ms (compile: 4ms, render: 72ms)
+ GET /contratos 200 in 96ms (compile: 1284µs, render: 95ms)
+ GET /contratos 200 in 73ms (compile: 41ms, render: 32ms)
+ GET /contratos 200 in 76ms (compile: 18ms, render: 58ms)
+ GET /contratos?tab=informes 200 in 111ms (compile: 5ms, render: 106ms)
+ GET /api/contratos/342f1929-28dc-4f3f-a3f2-c14c80d85445/pdf 200 in 158ms (compile: 133ms, render: 26ms)
+ GET / 307 in 281ms (compile: 145ms, render: 136ms)
+ GET /dashboard 200 in 666ms (compile: 80ms, render: 586ms)
+ GET / 307 in 23ms (compile: 1320µs, render: 22ms)
+ GET /dashboard 200 in 59ms (compile: 1466µs, render: 57ms)
+ GET /contratos 200 in 40ms (compile: 7ms, render: 34ms)
+ GET /contratos?tab=informes 200 in 82ms (compile: 5ms, render: 77ms)
+ GET / 307 in 49ms (compile: 15ms, render: 34ms)
+ GET /dashboard 307 in 215ms (compile: 2ms, render: 213ms)
+ GET /login 200 in 103ms (compile: 48ms, render: 55ms)
+ POST /api/login 303 in 61ms (compile: 41ms, render: 21ms)
+ GET /dashboard 200 in 88ms (compile: 3ms, render: 85ms)
+ GET /contratos 200 in 42ms (compile: 8ms, render: 33ms)
+ GET /api/contratos/342f1929-28dc-4f3f-a3f2-c14c80d85445/pdf 200 in 202ms (compile: 161ms, render: 41ms)
+✓ Compiled in 609ms
+ GET /contratos?tab=informes 200 in 685ms (compile: 542ms, render: 143ms)
+ GET /contratos?tab=informes 200 in 627ms (compile: 527ms, render: 100ms)
+ GET /contratos?tab=informes 200 in 631ms (compile: 556ms, render: 74ms)
+ GET /contratos?tab=informes 200 in 628ms (compile: 546ms, render: 83ms)
+ GET /contratos?tab=informes 200 in 633ms (compile: 567ms, render: 67ms)
+ GET /contratos?tab=informes 200 in 633ms (compile: 575ms, render: 58ms)
+ GET /contratos?tab=informes 200 in 113ms (compile: 1739µs, render: 112ms)
+ GET /contratos?tab=informes 200 in 98ms (compile: 43ms, render: 55ms)
+ GET /contratos?tab=informes 200 in 100ms (compile: 3ms, render: 97ms)
+ GET /contratos?tab=informes 200 in 100ms (compile: 20ms, render: 80ms)
+ GET /contratos?tab=informes 200 in 99ms (compile: 35ms, render: 64ms)
+ GET /contratos?tab=informes 200 in 99ms (compile: 27ms, render: 72ms)
+ GET /contratos?tab=informes 200 in 120ms (compile: 1930µs, render: 118ms)
+ GET /contratos?tab=informes 200 in 122ms (compile: 19ms, render: 102ms)
+ GET /contratos?tab=informes 200 in 122ms (compile: 11ms, render: 111ms)
+ GET /contratos?tab=informes 200 in 113ms (compile: 35ms, render: 78ms)
+ GET /contratos?tab=informes 200 in 114ms (compile: 28ms, render: 86ms)
+ GET /contratos?tab=informes 200 in 99ms (compile: 24ms, render: 75ms)
+ GET /contratos?tab=informes 200 in 103ms (compile: 2ms, render: 101ms)
+ GET /contratos?tab=informes 200 in 103ms (compile: 11ms, render: 92ms)
+ GET /contratos?tab=informes 200 in 72ms (compile: 4ms, render: 67ms)
+ GET /contratos?tab=informes 200 in 72ms (compile: 11ms, render: 61ms)
+ GET /contratos?tab=informes 200 in 105ms (compile: 18ms, render: 87ms)
+ GET /contratos?tab=informes 200 in 73ms (compile: 13ms, render: 60ms)
+ GET /contratos?tab=informes 200 in 104ms (compile: 2ms, render: 102ms)
+ GET /contratos?tab=informes 200 in 104ms (compile: 11ms, render: 93ms)
+ GET /contratos?tab=informes 200 in 79ms (compile: 5ms, render: 74ms)
+ GET /contratos?tab=informes 200 in 91ms (compile: 19ms, render: 72ms)
+ GET /contratos?tab=informes 200 in 91ms (compile: 11ms, render: 80ms)
+ GET /contratos?tab=informes 200 in 58ms (compile: 4ms, render: 54ms)
+ GET /contratos?tab=informes 200 in 86ms (compile: 3ms, render: 83ms)
+ GET /contratos?tab=informes 200 in 107ms (compile: 1619µs, render: 106ms)
+ GET /contratos?tab=informes 200 in 74ms (compile: 13ms, render: 61ms)
+ GET /contratos?tab=informes 200 in 85ms (compile: 12ms, render: 73ms)
+ GET /contratos?tab=informes 200 in 74ms (compile: 20ms, render: 54ms)
+ GET /contratos?tab=informes 200 in 63ms (compile: 25ms, render: 38ms)
+ GET /contratos?tab=informes 200 in 95ms (compile: 3ms, render: 92ms)
+ GET /contratos?tab=informes 200 in 111ms (compile: 1043µs, render: 110ms)
+ GET /contratos?tab=informes 200 in 84ms (compile: 22ms, render: 63ms)
+ GET /contratos?tab=informes 200 in 84ms (compile: 34ms, render: 50ms)
+ GET /contratos?tab=informes 200 in 86ms (compile: 15ms, render: 71ms)
+ GET /contratos?tab=informes 200 in 96ms (compile: 12ms, render: 84ms)
+ GET /contratos?tab=informes 200 in 103ms (compile: 21ms, render: 82ms)
+ GET /contratos?tab=informes 200 in 104ms (compile: 1706µs, render: 102ms)
+ GET /contratos?tab=informes 200 in 104ms (compile: 33ms, render: 70ms)
+ GET /contratos?tab=informes 200 in 104ms (compile: 9ms, render: 95ms)
+ GET /contratos?tab=informes 200 in 73ms (compile: 12ms, render: 61ms)
+ GET /contratos?tab=informes 200 in 64ms (compile: 18ms, render: 46ms)
+ GET /contratos?tab=informes 200 in 106ms (compile: 37ms, render: 70ms)
+ GET /contratos?tab=informes 200 in 107ms (compile: 23ms, render: 84ms)
+ GET /contratos?tab=informes 200 in 107ms (compile: 30ms, render: 77ms)
+ GET /contratos?tab=informes 200 in 107ms (compile: 10ms, render: 98ms)
+ GET /contratos?tab=informes 200 in 107ms (compile: 43ms, render: 63ms)
+ GET /contratos?tab=informes 200 in 108ms (compile: 2ms, render: 106ms)
+ GET /contratos?tab=informes 200 in 87ms (compile: 2ms, render: 85ms)
+ GET /contratos?tab=informes 200 in 105ms (compile: 1037µs, render: 104ms)
+ GET /contratos?tab=informes 200 in 86ms (compile: 33ms, render: 53ms)
+ GET /contratos?tab=informes 200 in 86ms (compile: 20ms, render: 67ms)
+ GET /contratos?tab=informes 200 in 87ms (compile: 13ms, render: 74ms)
+ GET /contratos?tab=informes 200 in 87ms (compile: 26ms, render: 60ms)
+ GET /contratos?tab=informes 200 in 106ms (compile: 1000µs, render: 105ms)
+ GET /contratos?tab=informes 200 in 88ms (compile: 34ms, render: 55ms)
+ GET /contratos?tab=informes 200 in 89ms (compile: 27ms, render: 62ms)
+ GET /contratos?tab=informes 200 in 89ms (compile: 20ms, render: 69ms)
+ GET /contratos?tab=informes 200 in 89ms (compile: 13ms, render: 76ms)
+ GET /contratos?tab=informes 200 in 91ms (compile: 2ms, render: 88ms)
+ GET /contratos?tab=informes 200 in 116ms (compile: 3ms, render: 113ms)
+ GET /contratos?tab=informes 200 in 96ms (compile: 2ms, render: 94ms)
+ GET /contratos?tab=informes 200 in 96ms (compile: 24ms, render: 72ms)
+ GET /contratos?tab=informes 200 in 97ms (compile: 10ms, render: 87ms)
+ GET /contratos?tab=informes 200 in 112ms (compile: 44ms, render: 68ms)
+ GET /contratos?tab=informes 200 in 115ms (compile: 17ms, render: 98ms)
+ GET /contratos?tab=informes 200 in 108ms (compile: 3ms, render: 106ms)
+ GET /contratos?tab=informes 200 in 89ms (compile: 9ms, render: 80ms)
+ GET /contratos?tab=informes 200 in 89ms (compile: 22ms, render: 67ms)
+ GET /contratos?tab=informes 200 in 90ms (compile: 2ms, render: 88ms)
+ GET /contratos?tab=informes 200 in 69ms (compile: 18ms, render: 50ms)
+ GET /contratos?tab=informes 200 in 54ms (compile: 12ms, render: 41ms)
+ GET /contratos?tab=informes 200 in 80ms (compile: 20ms, render: 60ms)
+ GET /contratos?tab=informes 200 in 109ms (compile: 1115µs, render: 108ms)
+ GET /contratos?tab=informes 200 in 109ms (compile: 17ms, render: 92ms)
+ GET /contratos?tab=informes 200 in 81ms (compile: 13ms, render: 68ms)
+ GET /contratos?tab=informes 200 in 80ms (compile: 32ms, render: 49ms)
+ GET /contratos?tab=informes 200 in 81ms (compile: 5ms, render: 76ms)
+ GET /contratos?tab=informes 200 in 106ms (compile: 1060µs, render: 105ms)
+ GET /contratos?tab=informes 200 in 91ms (compile: 3ms, render: 88ms)
+ GET /contratos?tab=informes 200 in 89ms (compile: 41ms, render: 48ms)
+ GET /contratos?tab=informes 200 in 89ms (compile: 21ms, render: 68ms)
+ GET /contratos?tab=informes 200 in 90ms (compile: 14ms, render: 76ms)
+ GET /contratos?tab=informes 200 in 89ms (compile: 28ms, render: 61ms)
+ GET /contratos?tab=informes 200 in 106ms (compile: 1033µs, render: 105ms)
+ GET /contratos?tab=informes 200 in 89ms (compile: 10ms, render: 79ms)
+ GET /contratos?tab=informes 200 in 89ms (compile: 2ms, render: 87ms)
+ GET /contratos?tab=informes 200 in 88ms (compile: 42ms, render: 46ms)
+ GET /contratos?tab=informes 200 in 89ms (compile: 23ms, render: 66ms)
+ GET /contratos?tab=informes 200 in 88ms (compile: 30ms, render: 59ms)
+ GET /contratos?tab=informes 200 in 24ms (compile: 968µs, render: 23ms)
+ GET /dashboard 200 in 215ms (compile: 104ms, render: 111ms)
+ GET /dashboard?metric=entregas 200 in 64ms (compile: 5ms, render: 59ms)
+ GET /dashboard?metric=entregas 200 in 62ms (compile: 18ms, render: 44ms)
+ GET /contratos 200 in 118ms (compile: 26ms, render: 92ms)
+ GET /contratos?tab=informes 200 in 133ms (compile: 3ms, render: 129ms)
+ GET /api/contratos/342f1929-28dc-4f3f-a3f2-c14c80d85445/pdf 200 in 216ms (compile: 179ms, render: 36ms)
+ GET /dashboard 200 in 132ms (compile: 12ms, render: 120ms)
+ GET /dashboard?metric=entregas 200 in 84ms (compile: 27ms, render: 57ms)
+ GET /dashboard?metric=entregas 200 in 86ms (compile: 6ms, render: 80ms)
+ GET /contratos 200 in 54ms (compile: 13ms, render: 41ms)
+ GET /contratos?tab=informes 200 in 106ms (compile: 4ms, render: 102ms)
+ GET /api/contratos/342f1929-28dc-4f3f-a3f2-c14c80d85445/pdf 200 in 200ms (compile: 158ms, render: 42ms)
+ GET /contratos?tab=informes 200 in 310ms (compile: 88ms, render: 222ms)
+ GET /contratos?tab=informes 200 in 162ms (compile: 7ms, render: 155ms)
+ GET /contratos?tab=informes 200 in 156ms (compile: 23ms, render: 134ms)
+ GET /contratos?tab=informes 200 in 135ms (compile: 20ms, render: 115ms)
+ GET /contratos?tab=informes 200 in 97ms (compile: 27ms, render: 70ms)
+ GET /contratos?tab=informes 200 in 121ms (compile: 25ms, render: 96ms)
+ GET /contratos?tab=informes 200 in 60ms (compile: 1149µs, render: 59ms)
+ GET /contratos?tab=informes 200 in 47ms (compile: 1827µs, render: 45ms)
+ GET /contratos?tab=informes 200 in 47ms (compile: 11ms, render: 36ms)
+ GET /dashboard 200 in 154ms (compile: 94ms, render: 61ms)
+ GET /dashboard?metric=entregas 200 in 66ms (compile: 22ms, render: 44ms)
+ GET /dashboard?metric=entregas 200 in 67ms (compile: 1806µs, render: 65ms)
+ GET /reservas?tab=gestion 200 in 535ms (compile: 195ms, render: 341ms)
+ GET /dashboard 200 in 54ms (compile: 7ms, render: 47ms)
+ GET /dashboard?metric=entregas 200 in 76ms (compile: 20ms, render: 56ms)
+ GET /dashboard?metric=entregas 200 in 77ms (compile: 2ms, render: 75ms)
+ GET /gestor 200 in 239ms (compile: 161ms, render: 78ms)
+ GET /configuracion 200 in 166ms (compile: 118ms, render: 49ms)
+ GET /gestor 200 in 58ms (compile: 5ms, render: 53ms)
+ GET /gestor?tab=plantillas 200 in 1100ms (compile: 5ms, render: 1096ms)
+ GET /gestor?tab=plantillas 200 in 103ms (compile: 8ms, render: 95ms)
+ GET /dashboard 200 in 73ms (compile: 10ms, render: 63ms)
+ GET /dashboard?metric=entregas 200 in 70ms (compile: 22ms, render: 48ms)
+ GET /dashboard?metric=entregas 200 in 72ms (compile: 5ms, render: 67ms)
+✓ Compiled in 138ms
+ GET /dashboard?metric=entregas 200 in 242ms (compile: 73ms, render: 169ms)
+ GET /dashboard?metric=entregas 200 in 127ms (compile: 6ms, render: 120ms)
+ GET /dashboard?metric=entregas 200 in 102ms (compile: 22ms, render: 80ms)
+ GET /dashboard?metric=entregas 200 in 82ms (compile: 19ms, render: 63ms)
+ GET /dashboard?metric=entregas 200 in 105ms (compile: 4ms, render: 100ms)
+ GET /dashboard?metric=entregas 200 in 66ms (compile: 18ms, render: 48ms)
+ GET /dashboard?metric=entregas 200 in 64ms (compile: 952µs, render: 63ms)
+ GET /dashboard?metric=entregas 200 in 64ms (compile: 9ms, render: 55ms)
+ GET /dashboard?metric=entregas 200 in 32ms (compile: 4ms, render: 28ms)
+ GET /dashboard?metric=entregas 200 in 282ms (compile: 87ms, render: 195ms)
+ GET /dashboard?metric=entregas 200 in 124ms (compile: 3ms, render: 121ms)
+ GET /dashboard?metric=entregas 200 in 124ms (compile: 34ms, render: 90ms)
+ GET /dashboard?metric=entregas 200 in 124ms (compile: 11ms, render: 113ms)
+ GET /dashboard?metric=entregas 200 in 124ms (compile: 52ms, render: 72ms)
+ GET /dashboard?metric=entregas 200 in 124ms (compile: 18ms, render: 107ms)
+ GET /dashboard?metric=entregas 200 in 77ms (compile: 949µs, render: 76ms)
+ GET /dashboard?metric=entregas 200 in 67ms (compile: 3ms, render: 64ms)
+ GET /dashboard?metric=entregas 200 in 68ms (compile: 14ms, render: 54ms)
+ GET /dashboard?metric=entregas 200 in 250ms (compile: 71ms, render: 179ms)
+ GET /dashboard?metric=entregas 200 in 101ms (compile: 16ms, render: 84ms)
+ GET /dashboard?metric=entregas 200 in 125ms (compile: 3ms, render: 122ms)
+ GET /dashboard?metric=entregas 200 in 124ms (compile: 24ms, render: 100ms)
+ GET /dashboard?metric=entregas 200 in 89ms (compile: 16ms, render: 74ms)
+ GET /dashboard?metric=entregas 200 in 95ms (compile: 23ms, render: 73ms)
+ GET /dashboard?metric=entregas 200 in 67ms (compile: 1183µs, render: 66ms)
+ GET /dashboard?metric=entregas 200 in 67ms (compile: 9ms, render: 58ms)
+ GET /dashboard?metric=entregas 200 in 45ms (compile: 4ms, render: 41ms)
+ GET /gestor 200 in 318ms (compile: 115ms, render: 203ms)
+ GET /gestor?tab=plantillas 200 in 1155ms (compile: 3ms, render: 1152ms)
+ GET /gestor?tab=plantillas 200 in 322ms (compile: 81ms, render: 241ms)
+ GET /gestor?tab=plantillas 200 in 312ms (compile: 168ms, render: 143ms)
+ GET /gestor?tab=plantillas 200 in 365ms (compile: 118ms, render: 247ms)
+✓ Compiled in 16ms
+ GET /gestor?tab=plantillas 200 in 242ms (compile: 11ms, render: 231ms)
+ GET /gestor?tab=plantillas 200 in 268ms (compile: 1394µs, render: 266ms)
+ GET /gestor?tab=plantillas 200 in 234ms (compile: 16ms, render: 218ms)
+ GET /gestor?tab=plantillas 200 in 454ms (compile: 129ms, render: 325ms)
+ GET /gestor?tab=plantillas 200 in 258ms (compile: 3ms, render: 255ms)
+ GET /gestor?tab=plantillas 200 in 309ms (compile: 8ms, render: 301ms)
+ GET /gestor?tab=plantillas 200 in 111ms (compile: 10ms, render: 101ms)
+ GET /gestor?tab=plantillas 200 in 113ms (compile: 2ms, render: 111ms)
+ GET /gestor?tab=plantillas 200 in 127ms (compile: 1517µs, render: 125ms)
+ GET /gestor?tab=plantillas 200 in 287ms (compile: 147ms, render: 140ms)
+✓ Compiled in 73ms
+ GET /gestor?tab=plantillas 200 in 154ms (compile: 6ms, render: 148ms)
+✓ Compiled in 7ms
+ GET /gestor?tab=plantillas 200 in 130ms (compile: 3ms, render: 127ms)
+ GET /gestor?tab=plantillas 200 in 249ms (compile: 149ms, render: 100ms)
+✓ Compiled in 16ms
+ GET /gestor?tab=plantillas 200 in 1401ms (compile: 9ms, render: 1393ms)
+✓ Compiled in 18ms
+ GET /dashboard 200 in 220ms (compile: 159ms, render: 62ms)
+ GET /dashboard?metric=entregas 200 in 112ms (compile: 23ms, render: 89ms)
+ GET /dashboard?metric=entregas 200 in 113ms (compile: 1612µs, render: 111ms)
+ GET /reservas 200 in 178ms (compile: 122ms, render: 56ms)
+ GET /contratos 200 in 163ms (compile: 114ms, render: 49ms)
+ GET /vehiculos 200 in 234ms (compile: 178ms, render: 56ms)
+ GET /gestor 200 in 90ms (compile: 10ms, render: 80ms)
+ GET /gestor?tab=gastos 200 in 604ms (compile: 4ms, render: 600ms)
+ GET /gestor?tab=plantillas 200 in 213ms (compile: 5ms, render: 209ms)
+ GET /gestor?tab=plantillas 200 in 169ms (compile: 4ms, render: 165ms)
+ GET /gestor?tab=plantillas 200 in 209ms (compile: 96ms, render: 113ms)
+ GET /gestor?tab=plantillas 200 in 256ms (compile: 167ms, render: 89ms)
+ POST /api/login 303 in 30ms (compile: 21ms, render: 9ms)
+ GET /login 200 in 258ms (compile: 122ms, render: 136ms)
+ GET /gestor?tab=plantillas&view=amplia&qTemplate= 200 in 1301ms (compile: 7ms, render: 1293ms)
+ GET /gestor?tab=plantillas&view=compacta&qTemplate= 200 in 194ms (compile: 7ms, render: 187ms)
+ GET /gestor?tab=usuarios 200 in 422ms (compile: 29ms, render: 393ms)
+ GET /gestor?tab=sucursales 200 in 264ms (compile: 4ms, render: 260ms)
+ GET /gestor?tab=sucursales&branchView=horarios 200 in 80ms (compile: 5ms, render: 75ms)
+ GET /gestor?tab=sucursales&branchView=general 200 in 87ms (compile: 4ms, render: 83ms)
+ GET /gestor?tab=tarifas 200 in 208ms (compile: 5ms, render: 203ms)
+ GET /gestor?tab=backups 200 in 309ms (compile: 2ms, render: 306ms)
+ GET /gestor?tab=backups 200 in 175ms (compile: 14ms, render: 161ms)
+ GET /dashboard 200 in 80ms (compile: 7ms, render: 73ms)
+ GET /dashboard?metric=entregas 200 in 99ms (compile: 12ms, render: 86ms)
+ GET /dashboard?metric=entregas 200 in 99ms (compile: 36ms, render: 63ms)
+ GET /reservas 200 in 132ms (compile: 15ms, render: 117ms)
+ GET /contratos 200 in 61ms (compile: 7ms, render: 54ms)
+ GET /vehiculos 200 in 67ms (compile: 10ms, render: 56ms)
+ GET /clientes 200 in 295ms (compile: 224ms, render: 71ms)
+ GET /facturacion 200 in 257ms (compile: 177ms, render: 80ms)
+ GET /gestor 200 in 55ms (compile: 9ms, render: 46ms)
+ GET /configuracion 200 in 134ms (compile: 92ms, render: 42ms)
+⚠ Found a change in next.config.ts. Restarting the server to apply the changes...
+▲ Next.js 16.1.6 (Turbopack)
+- Local:         http://localhost:3203
+- Network:       http://192.168.18.62:3203
+
+✓ Starting...
+✓ Ready in 8.6s
+ GET /dashboard 200 in 1588ms (compile: 772ms, render: 816ms)
+ GET /dashboard?metric=entregas 200 in 33ms (compile: 3ms, render: 30ms)
+✓ Compiled in 26ms
+⚠ Fast Refresh had to perform a full reload when ./src/components/theme-provider.tsx changed. Read more: https://nextjs.org/docs/messages/fast-refresh-reload
+ GET /dashboard?metric=entregas 200 in 130ms (compile: 87ms, render: 43ms)
+ GET /dashboard?metric=entregas 200 in 56ms (compile: 1366µs, render: 55ms)
+ GET /dashboard?metric=entregas 200 in 38ms (compile: 1965µs, render: 36ms)
+⚠ Fast Refresh had to perform a full reload when ./src/components/theme-provider.tsx changed. Read more: https://nextjs.org/docs/messages/fast-refresh-reload
+✓ Compiled in 101ms
+⚠ Found a change in next.config.ts. Restarting the server to apply the changes...
+▲ Next.js 16.1.6 (Turbopack)
+- Local:         http://localhost:3203
+- Network:       http://192.168.18.62:3203
+
+✓ Starting...
+✓ Ready in 549ms
+ GET /dashboard?metric=entregas 200 in 721ms (compile: 262ms, render: 459ms)
+ GET /dashboard?metric=entregas 200 in 150ms (compile: 76ms, render: 74ms)
+ GET /dashboard?metric=entregas 200 in 140ms (compile: 73ms, render: 67ms)
+ GET /dashboard?metric=entregas 200 in 128ms (compile: 57ms, render: 72ms)
+ GET /dashboard?metric=entregas 200 in 109ms (compile: 57ms, render: 51ms)
+ GET /dashboard?metric=entregas 200 in 131ms (compile: 56ms, render: 75ms)
+ GET /dashboard?metric=entregas 200 in 162ms (compile: 63ms, render: 99ms)
+ GET /dashboard?metric=entregas 200 in 106ms (compile: 57ms, render: 49ms)
+ GET /dashboard?metric=entregas 200 in 141ms (compile: 57ms, render: 84ms)
+ GET /dashboard?metric=entregas 200 in 115ms (compile: 56ms, render: 59ms)
+✓ Compiled in 2ms
+ GET /dashboard?metric=entregas 200 in 134ms (compile: 55ms, render: 79ms)
+ GET /dashboard?metric=entregas 200 in 115ms (compile: 59ms, render: 56ms)
+ GET /dashboard?metric=entregas 200 in 580ms (compile: 7ms, render: 573ms)
+ GET /dashboard?metric=entregas 200 in 130ms (compile: 76ms, render: 55ms)
+ GET /dashboard?metric=entregas 200 in 139ms (compile: 57ms, render: 82ms)
+ GET /dashboard?metric=entregas 200 in 108ms (compile: 55ms, render: 53ms)
+✓ Compiled in 3ms
+ GET /dashboard?metric=entregas 200 in 122ms (compile: 68ms, render: 54ms)
+ GET /dashboard?metric=entregas 200 in 118ms (compile: 69ms, render: 49ms)
+ GET /dashboard?metric=entregas 200 in 145ms (compile: 79ms, render: 66ms)
+ GET /reservas?tab=planning 307 in 183ms (compile: 66ms, render: 117ms)
+ GET /planning-completo?start=2026-03-03&period=30&plate=&group=&model= 200 in 543ms (compile: 139ms, render: 404ms)
+ GET /planning-completo?start=2026-03-03&period=30&plate=&group=&model= 200 in 109ms (compile: 66ms, render: 43ms)
+ GET /planning-completo?start=2026-03-03&period=30&plate=&group=&model= 200 in 114ms (compile: 73ms, render: 40ms)
+✓ Compiled in 4ms
+ GET /planning-completo?start=2026-03-03&period=30&plate=&group=&model= 200 in 519ms (compile: 6ms, render: 512ms)
+ GET /planning-completo?start=2026-03-03&period=30&plate=&group=&model= 200 in 115ms (compile: 74ms, render: 41ms)
+✓ Compiled in 2ms
+✓ Compiled in 15ms
+ GET /planning-completo?start=2026-03-03&period=30&plate=&group=&model= 200 in 110ms (compile: 67ms, render: 43ms)
+ GET /planning-completo?start=2026-03-03&period=30&plate=&group=&model= 200 in 85ms (compile: 9ms, render: 76ms)
+ GET /planning-completo?start=2026-03-03&period=30&plate=&group=&model= 200 in 55ms (compile: 7ms, render: 47ms)
+ GET /planning-completo?start=2026-03-03&period=30&plate=&group=&model= 200 in 54ms (compile: 4ms, render: 50ms)
+ GET /apple-touch-icon.png 404 in 647ms (compile: 600ms, render: 47ms)
+ GET /apple-touch-icon-precomposed.png 404 in 656ms (compile: 620ms, render: 36ms)
+ GET /planning-completo?start=2026-03-03&period=30&plate=&group=&model= 200 in 53ms (compile: 6ms, render: 47ms)
+ GET /planning-completo?start=2026-03-03&period=30&plate=&group=&model= 200 in 131ms (compile: 74ms, render: 57ms)
+ GET /planning-completo?start=2026-03-03&period=30&plate=&group=&model= 307 in 5.1s (compile: 2.2s, render: 2.9s)
+ GET /login 200 in 192ms (compile: 163ms, render: 28ms)
+ POST /api/login 303 in 164ms (compile: 154ms, render: 10ms)
+ GET /login?error=invalid 200 in 20ms (compile: 2ms, render: 18ms)
+ POST /api/login 303 in 20ms (compile: 3ms, render: 17ms)
+ GET /dashboard 200 in 504ms (compile: 3ms, render: 501ms)
+ GET /reservas?tab=planning 307 in 63ms (compile: 9ms, render: 54ms)
+ GET /planning-completo?start=2026-03-04&period=30&plate=&group=&model= 200 in 398ms (compile: 3ms, render: 395ms)
+ GET /planning-completo?start=2026-03-04&period=30&plate=&group=&model= 200 in 176ms (compile: 79ms, render: 97ms)
+ GET /planning-completo?start=2026-03-04&period=30&plate=&group=&model= 200 in 29ms (compile: 2ms, render: 27ms)
+ GET /planning-completo?start=2026-03-04&period=30&plate=&group=&model= 200 in 29ms (compile: 12ms, render: 17ms)
+ GET /planning-completo?start=2026-03-04&period=30&plate=&group=&model= 200 in 116ms (compile: 72ms, render: 44ms)
+ GET /planning-completo?start=2026-03-04&period=30&plate=&group=&model= 200 in 106ms (compile: 58ms, render: 48ms)
+ GET /planning-completo?start=2026-03-04&period=30&plate=&group=&model= 200 in 192ms (compile: 118ms, render: 74ms)
+ GET /planning-completo?start=2026-03-04&period=30&plate=&group=&model= 200 in 175ms (compile: 82ms, render: 93ms)
+ GET /planning-completo?start=2026-03-04&period=30&plate=&group=&model= 200 in 116ms (compile: 70ms, render: 46ms)
+ GET /planning-completo?start=2026-03-04&period=30&plate=&group=&model= 200 in 116ms (compile: 73ms, render: 43ms)
+ GET /dashboard 200 in 656ms (compile: 139ms, render: 517ms)
+ GET /dashboard?metric=entregas 200 in 26ms (compile: 3ms, render: 23ms)
+ GET /vehiculos 200 in 140ms (compile: 102ms, render: 37ms)
+ GET /reservas 200 in 148ms (compile: 103ms, render: 45ms)
+ GET /contratos 200 in 111ms (compile: 89ms, render: 22ms)
+ GET /vehiculos 200 in 38ms (compile: 7ms, render: 32ms)
+ GET /clientes 200 in 131ms (compile: 111ms, render: 20ms)
+ GET /facturacion 200 in 204ms (compile: 151ms, render: 53ms)
+ GET /gestor 200 in 119ms (compile: 87ms, render: 31ms)
+ GET /ayuda 200 in 110ms (compile: 96ms, render: 14ms)
+ GET /gestor 200 in 48ms (compile: 5ms, render: 43ms)
+ GET /reservas 200 in 44ms (compile: 6ms, render: 38ms)
+ GET /reservas?tab=entregas 200 in 496ms (compile: 4ms, render: 492ms)
+ GET /reservas?tab=recogidas 200 in 293ms (compile: 5ms, render: 288ms)
+ GET /reservas?tab=localizar 200 in 257ms (compile: 6ms, render: 251ms)
+ GET /planning-completo?start=2026-03-04&period=30&plate=&group=&model= 200 in 461ms (compile: 7ms, render: 454ms)
+ GET /vehiculos 200 in 55ms (compile: 9ms, render: 46ms)
+ GET /facturacion 200 in 54ms (compile: 9ms, render: 45ms)
+ GET /gestor 200 in 57ms (compile: 7ms, render: 49ms)
+ GET /configuracion 200 in 190ms (compile: 166ms, render: 24ms)
+ GET /ayuda 200 in 33ms (compile: 8ms, render: 25ms)
+ GET /reservas 200 in 48ms (compile: 10ms, render: 39ms)
+ GET /reservas?tab=canales 200 in 323ms (compile: 5ms, render: 318ms)
+ GET /reservas?tab=localizar 200 in 88ms (compile: 5ms, render: 83ms)
+ GET /reservas?tab=recogidas 200 in 85ms (compile: 4ms, render: 80ms)
+ GET /reservas?tab=informes 200 in 346ms (compile: 4ms, render: 343ms)
+ GET /reservas?tab=entregas 200 in 82ms (compile: 7ms, render: 75ms)
+ GET /reservas?tab=gestion 200 in 98ms (compile: 5ms, render: 93ms)
+ GET /vehiculos 200 in 45ms (compile: 10ms, render: 35ms)
+ GET /vehiculos?tab=produccion 200 in 544ms (compile: 5ms, render: 539ms)
+ GET /vehiculos?tab=listados 200 in 153ms (compile: 5ms, render: 147ms)
+ GET /vehiculos?tab=grupos 200 in 340ms (compile: 5ms, render: 335ms)
+ GET /vehiculos?tab=modelos 200 in 251ms (compile: 8ms, render: 243ms)
+✓ Compiled in 36ms
+ GET /vehiculos?tab=modelos 200 in 89ms (compile: 13ms, render: 76ms)
+ GET /dashboard 200 in 180ms (compile: 120ms, render: 60ms)
+ GET /dashboard?metric=entregas 200 in 54ms (compile: 1451µs, render: 53ms)
+ GET /dashboard?metric=entregas 200 in 55ms (compile: 10ms, render: 45ms)
+ GET /dashboard?metric=entregas 200 in 177ms (compile: 100ms, render: 77ms)
+ GET /dashboard?metric=entregas 200 in 167ms (compile: 106ms, render: 61ms)
+ GET /dashboard?metric=entregas 200 in 167ms (compile: 103ms, render: 64ms)
+ GET /dashboard?metric=entregas 200 in 186ms (compile: 96ms, render: 90ms)
+ GET /dashboard?metric=entregas 200 in 168ms (compile: 79ms, render: 90ms)
+ GET /dashboard?metric=entregas 200 in 170ms (compile: 108ms, render: 62ms)
+ GET /dashboard?metric=entregas 200 in 199ms (compile: 105ms, render: 94ms)
+ GET /dashboard?metric=entregas 200 in 303ms (compile: 152ms, render: 151ms)
+ GET /facturacion 200 in 50ms (compile: 18ms, render: 32ms)
+✓ Compiled in 24ms
+ GET /facturacion 200 in 53ms (compile: 2ms, render: 51ms)
+ GET /dashboard 200 in 231ms (compile: 152ms, render: 79ms)
+ GET /dashboard?metric=entregas 200 in 82ms (compile: 3ms, render: 79ms)
+ GET /dashboard?metric=entregas 200 in 62ms (compile: 6ms, render: 55ms)
+ GET /dashboard?metric=entregas 200 in 195ms (compile: 98ms, render: 97ms)
+ GET /dashboard?metric=entregas 200 in 121ms (compile: 69ms, render: 52ms)
+✓ Compiled in 10ms
+ GET /dashboard?metric=entregas 200 in 598ms (compile: 18ms, render: 580ms)
+ GET /dashboard?metric=entregas 200 in 300ms (compile: 113ms, render: 187ms)
+ GET /dashboard?metric=entregas 200 in 119ms (compile: 11ms, render: 108ms)
+ GET /dashboard?metric=entregas 200 in 116ms (compile: 26ms, render: 90ms)
+ GET /dashboard?metric=entregas 200 in 94ms (compile: 20ms, render: 73ms)
+ GET /dashboard?metric=entregas 200 in 121ms (compile: 5ms, render: 116ms)
+ GET /dashboard?metric=entregas 200 in 76ms (compile: 20ms, render: 57ms)
+ GET /dashboard?metric=entregas 200 in 64ms (compile: 1263µs, render: 63ms)
+ GET /dashboard?metric=entregas 200 in 43ms (compile: 12ms, render: 31ms)
+ GET /dashboard?metric=entregas 200 in 44ms (compile: 2ms, render: 42ms)
+ GET /dashboard?metric=entregas 200 in 31ms (compile: 1660µs, render: 29ms)
+✓ Compiled in 39ms
+ GET /dashboard?metric=entregas 200 in 147ms (compile: 96ms, render: 51ms)
+ GET /dashboard?metric=entregas 200 in 99ms (compile: 48ms, render: 50ms)
+ GET /facturacion 200 in 265ms (compile: 190ms, render: 75ms)
+ GET /vehiculos 200 in 152ms (compile: 107ms, render: 45ms)
+ GET /contratos 200 in 147ms (compile: 103ms, render: 44ms)
+ GET /dashboard 200 in 56ms (compile: 7ms, render: 50ms)
+ GET /dashboard?metric=entregas 200 in 65ms (compile: 22ms, render: 43ms)
+ GET /dashboard?metric=entregas 200 in 66ms (compile: 3ms, render: 63ms)
+ GET /reservas?tab=planning 307 in 195ms (compile: 94ms, render: 101ms)
+ GET /planning-completo?start=2026-03-04&period=30&plate=&group=&model= 200 in 35ms (compile: 2ms, render: 33ms)
+ GET /planning-completo?branch=&start=2026-03-26&period=60&plate=&group=&model= 200 in 69ms (compile: 6ms, render: 63ms)
+ GET /planning-completo?branch=&start=2026-03-26&period=60&plate=&group=&model= 200 in 211ms (compile: 4ms, render: 208ms)
+ GET /planning-completo?branch=&start=2026-03-26&period=60&plate=&group=&model= 200 in 380ms (compile: 108ms, render: 272ms)
+ GET /planning-completo?branch=&start=2026-03-26&period=60&plate=&group=&model= 200 in 181ms (compile: 43ms, render: 138ms)
+ GET /planning-completo?branch=&start=2026-03-26&period=60&plate=&group=&model= 200 in 142ms (compile: 37ms, render: 105ms)
+ GET /planning-completo?branch=&start=2026-03-26&period=60&plate=&group=&model= 200 in 112ms (compile: 31ms, render: 81ms)
+ GET /planning-completo?branch=&start=2026-03-26&period=60&plate=&group=&model= 200 in 239ms (compile: 32ms, render: 206ms)
+ GET /planning-completo?branch=&start=2026-03-26&period=60&plate=&group=&model= 200 in 159ms (compile: 2ms, render: 156ms)
+ GET /planning-completo?branch=&start=2026-03-26&period=60&plate=&group=&model= 200 in 158ms (compile: 28ms, render: 130ms)
+ GET /planning-completo?branch=&start=2026-03-26&period=60&plate=&group=&model= 200 in 106ms (compile: 9ms, render: 97ms)
+ GET /dashboard 200 in 675ms (compile: 91ms, render: 584ms)
+ GET /dashboard?metric=entregas 200 in 39ms (compile: 2ms, render: 37ms)
+ GET /facturacion 200 in 241ms (compile: 161ms, render: 80ms)
+ GET /facturacion 200 in 299ms (compile: 142ms, render: 157ms)
+ GET /facturacion 200 in 84ms (compile: 10ms, render: 74ms)
+ GET /facturacion 200 in 93ms (compile: 10ms, render: 83ms)
+ GET /facturacion 200 in 94ms (compile: 1443µs, render: 93ms)
+ GET /facturacion 200 in 76ms (compile: 16ms, render: 60ms)
+ GET /facturacion 200 in 62ms (compile: 10ms, render: 52ms)
+ GET /facturacion 200 in 48ms (compile: 1446µs, render: 47ms)
+ GET /facturacion 200 in 34ms (compile: 8ms, render: 26ms)
+ GET /facturacion 200 in 35ms (compile: 1166µs, render: 34ms)
+ GET /facturacion 200 in 261ms (compile: 113ms, render: 148ms)
+ GET /facturacion 200 in 81ms (compile: 15ms, render: 66ms)
+ GET /facturacion 200 in 91ms (compile: 1393µs, render: 89ms)
+ GET /facturacion 200 in 52ms (compile: 10ms, render: 42ms)
+ GET /facturacion 200 in 78ms (compile: 10ms, render: 68ms)
+ GET /facturacion 200 in 70ms (compile: 18ms, render: 51ms)
+ GET /facturacion 200 in 33ms (compile: 2ms, render: 31ms)
+ GET /facturacion 200 in 44ms (compile: 1575µs, render: 42ms)
+ GET /facturacion 200 in 24ms (compile: 1020µs, render: 23ms)
+ GET /facturacion 200 in 202ms (compile: 123ms, render: 79ms)
+✓ Compiled in 13ms
+ GET /facturacion 200 in 312ms (compile: 197ms, render: 115ms)
+ GET /dashboard 200 in 138ms (compile: 91ms, render: 47ms)
+ GET /dashboard?metric=entregas 200 in 58ms (compile: 1930µs, render: 56ms)
+ GET /dashboard?metric=entregas 200 in 49ms (compile: 5ms, render: 44ms)
+✓ Compiled in 362ms
+ GET /dashboard?metric=entregas 200 in 75ms (compile: 5ms, render: 70ms)
+✓ Compiled in 70ms
+✓ Compiled in 33ms
+✓ Compiled in 43ms
+ GET /dashboard?metric=entregas 200 in 364ms (compile: 169ms, render: 195ms)
+ GET /dashboard?metric=entregas 200 in 135ms (compile: 20ms, render: 115ms)
+ GET /dashboard?metric=entregas 200 in 119ms (compile: 16ms, render: 103ms)
+ GET /dashboard?metric=entregas 200 in 119ms (compile: 34ms, render: 84ms)
+ GET /dashboard?metric=entregas 200 in 118ms (compile: 41ms, render: 78ms)
+ GET /dashboard?metric=entregas 200 in 119ms (compile: 23ms, render: 96ms)
+ GET /dashboard?metric=entregas 200 in 111ms (compile: 999µs, render: 110ms)
+ GET /dashboard?metric=entregas 200 in 95ms (compile: 22ms, render: 73ms)
+ GET /dashboard?metric=entregas 200 in 96ms (compile: 29ms, render: 67ms)
+ GET /dashboard?metric=entregas 200 in 97ms (compile: 11ms, render: 86ms)
+ GET /dashboard?metric=entregas 200 in 97ms (compile: 3ms, render: 94ms)
+ GET /gestor 200 in 181ms (compile: 128ms, render: 52ms)
+ GET /gestor?tab=tarifas 200 in 590ms (compile: 4ms, render: 586ms)
+ GET /gestor?tab=tarifas&qTariff= 200 in 98ms (compile: 4ms, render: 95ms)
+ GET /gestor?tab=usuarios 200 in 413ms (compile: 5ms, render: 408ms)
+ GET /gestor?tab=tarifas 200 in 132ms (compile: 4ms, render: 128ms)
+ GET /gestor?tab=tarifas&error=NEXT_REDIRECT 200 in 46ms (compile: 2ms, render: 44ms)
+ POST /gestor?tab=tarifas 303 in 92ms (compile: 3ms, render: 89ms)
+ GET /gestor?tab=tarifas&tariffPlanId=3f0aa123-0233-466b-93f3-13f656f6ea5a&error=NEXT_REDIRECT 200 in 51ms (compile: 1890µs, render: 49ms)
+ POST /gestor?tab=tarifas&error=NEXT_REDIRECT 303 in 95ms (compile: 7ms, render: 87ms)
+✓ Compiled in 87ms
+ GET /gestor?tab=tarifas&tariffPlanId=3f0aa123-0233-466b-93f3-13f656f6ea5a&error=NEXT_REDIRECT 200 in 385ms (compile: 168ms, render: 218ms)
+ GET /gestor?tab=tarifas&tariffPlanId=3f0aa123-0233-466b-93f3-13f656f6ea5a&error=NEXT_REDIRECT 200 in 155ms (compile: 2ms, render: 153ms)
+ GET /gestor?tab=tarifas&tariffPlanId=3f0aa123-0233-466b-93f3-13f656f6ea5a&error=NEXT_REDIRECT 200 in 155ms (compile: 11ms, render: 143ms)
+ GET /gestor?tab=tarifas&tariffPlanId=3f0aa123-0233-466b-93f3-13f656f6ea5a&error=NEXT_REDIRECT 200 in 145ms (compile: 16ms, render: 129ms)
+ GET /gestor?tab=tarifas&tariffPlanId=3f0aa123-0233-466b-93f3-13f656f6ea5a&error=NEXT_REDIRECT 200 in 121ms (compile: 17ms, render: 104ms)
+ GET /gestor?tab=tarifas&tariffPlanId=3f0aa123-0233-466b-93f3-13f656f6ea5a&error=NEXT_REDIRECT 200 in 131ms (compile: 11ms, render: 120ms)
+ GET /gestor?tab=tarifas&tariffPlanId=3f0aa123-0233-466b-93f3-13f656f6ea5a&error=NEXT_REDIRECT 200 in 106ms (compile: 11ms, render: 95ms)
+ GET /gestor?tab=tarifas&tariffPlanId=3f0aa123-0233-466b-93f3-13f656f6ea5a&error=NEXT_REDIRECT 200 in 106ms (compile: 1205µs, render: 105ms)
+ GET /gestor?tab=tarifas&tariffPlanId=3f0aa123-0233-466b-93f3-13f656f6ea5a&error=NEXT_REDIRECT 200 in 85ms (compile: 1548µs, render: 84ms)
+ GET /gestor?tab=tarifas&tariffPlanId=3f0aa123-0233-466b-93f3-13f656f6ea5a&error=NEXT_REDIRECT 200 in 1026ms (compile: 14ms, render: 1012ms)
+ GET /gestor?tab=tarifas&tariffPlanId=3f0aa123-0233-466b-93f3-13f656f6ea5a&error=NEXT_REDIRECT 200 in 432ms (compile: 80ms, render: 352ms)
+ GET /gestor?tab=tarifas&tariffPlanId=3f0aa123-0233-466b-93f3-13f656f6ea5a&error=NEXT_REDIRECT 200 in 280ms (compile: 1502µs, render: 278ms)
+ GET /gestor?tab=tarifas&tariffPlanId=3f0aa123-0233-466b-93f3-13f656f6ea5a&error=NEXT_REDIRECT 200 in 281ms (compile: 22ms, render: 259ms)
+ GET /gestor?tab=tarifas&tariffPlanId=3f0aa123-0233-466b-93f3-13f656f6ea5a&error=NEXT_REDIRECT 200 in 331ms (compile: 42ms, render: 290ms)
+ GET /gestor?tab=tarifas&tariffPlanId=3f0aa123-0233-466b-93f3-13f656f6ea5a&error=NEXT_REDIRECT 200 in 296ms (compile: 26ms, render: 270ms)
+ GET /gestor?tab=tarifas&tariffPlanId=3f0aa123-0233-466b-93f3-13f656f6ea5a&error=NEXT_REDIRECT 200 in 287ms (compile: 17ms, render: 270ms)
+ GET /gestor?tab=tarifas&tariffPlanId=3f0aa123-0233-466b-93f3-13f656f6ea5a&error=NEXT_REDIRECT 200 in 79ms (compile: 2ms, render: 76ms)
+ GET /gestor?tab=tarifas&tariffPlanId=3f0aa123-0233-466b-93f3-13f656f6ea5a&error=NEXT_REDIRECT 200 in 135ms (compile: 6ms, render: 129ms)
+ GET /gestor?tab=tarifas&tariffPlanId=3f0aa123-0233-466b-93f3-13f656f6ea5a&error=NEXT_REDIRECT 200 in 60ms (compile: 6ms, render: 55ms)
+ GET /dashboard 200 in 91ms (compile: 8ms, render: 83ms)
+ GET /dashboard?metric=entregas 200 in 72ms (compile: 14ms, render: 58ms)
+ GET /dashboard?metric=entregas 200 in 74ms (compile: 2ms, render: 72ms)
+ GET /gestor 200 in 136ms (compile: 14ms, render: 122ms)
+ GET /gestor?tab=tarifas 200 in 822ms (compile: 7ms, render: 815ms)
+✓ Compiled in 82ms
+ GET /gestor?tab=tarifas 200 in 89ms (compile: 8ms, render: 81ms)
+✓ Compiled in 15ms
+ GET /gestor?tab=tarifas 200 in 78ms (compile: 9ms, render: 70ms)
+ GET /dashboard 200 in 205ms (compile: 146ms, render: 59ms)
+ GET /dashboard?metric=entregas 200 in 67ms (compile: 3ms, render: 64ms)
+ GET /dashboard?metric=entregas 200 in 56ms (compile: 10ms, render: 46ms)
+ GET /reservas 200 in 170ms (compile: 114ms, render: 56ms)
+ GET /dashboard 200 in 62ms (compile: 10ms, render: 52ms)
+ GET /dashboard?metric=entregas 200 in 61ms (compile: 2ms, render: 59ms)
+ GET /dashboard?metric=entregas 200 in 61ms (compile: 17ms, render: 44ms)
+✓ Compiled in 153ms
+✓ Compiled in 88ms
+✓ Compiled in 80ms
+✓ Compiled in 69ms
+ GET /dashboard?metric=entregas 200 in 410ms (compile: 192ms, render: 218ms)
+ GET /dashboard?metric=entregas 200 in 157ms (compile: 7ms, render: 150ms)
+ GET /dashboard?metric=entregas 200 in 151ms (compile: 25ms, render: 127ms)
+ GET /dashboard?metric=entregas 200 in 133ms (compile: 26ms, render: 106ms)
+ GET /dashboard?metric=entregas 200 in 111ms (compile: 24ms, render: 87ms)
+ GET /dashboard?metric=entregas 200 in 118ms (compile: 24ms, render: 94ms)
+ GET /dashboard?metric=entregas 200 in 158ms (compile: 31ms, render: 127ms)
+ GET /dashboard?metric=entregas 200 in 159ms (compile: 1856µs, render: 157ms)
+ GET /dashboard?metric=entregas 200 in 131ms (compile: 19ms, render: 112ms)
+ GET /dashboard?metric=entregas 200 in 101ms (compile: 22ms, render: 79ms)
+ GET /dashboard?metric=entregas 200 in 163ms (compile: 14ms, render: 149ms)
+ GET /dashboard?metric=entregas 200 in 130ms (compile: 16ms, render: 115ms)
+ GET /dashboard?metric=entregas 200 in 144ms (compile: 3ms, render: 141ms)
+ GET /dashboard?metric=entregas 200 in 142ms (compile: 17ms, render: 125ms)
+ GET /dashboard?metric=entregas 200 in 116ms (compile: 12ms, render: 104ms)
+ GET /dashboard?metric=entregas 200 in 117ms (compile: 5ms, render: 112ms)
+ GET /dashboard?metric=entregas 200 in 87ms (compile: 8ms, render: 79ms)
+ GET /dashboard?metric=entregas 200 in 149ms (compile: 30ms, render: 119ms)
+ GET /dashboard?metric=entregas 200 in 140ms (compile: 18ms, render: 121ms)
+ GET /dashboard?metric=entregas 200 in 140ms (compile: 25ms, render: 115ms)
+ GET /dashboard?metric=entregas 200 in 141ms (compile: 1658µs, render: 139ms)
+ GET /dashboard?metric=entregas 200 in 106ms (compile: 8ms, render: 99ms)
+ GET /dashboard?metric=entregas 200 in 113ms (compile: 9ms, render: 104ms)
+ GET /dashboard?metric=entregas 200 in 125ms (compile: 17ms, render: 108ms)
+ GET /dashboard?metric=entregas 200 in 144ms (compile: 14ms, render: 130ms)
+ GET /dashboard?metric=entregas 200 in 144ms (compile: 7ms, render: 137ms)
+ GET /dashboard?metric=entregas 200 in 144ms (compile: 20ms, render: 124ms)
+ GET /dashboard?metric=entregas 200 in 149ms (compile: 12ms, render: 138ms)
+ GET /dashboard?metric=entregas 200 in 121ms (compile: 5ms, render: 116ms)
+ GET /dashboard?metric=entregas 200 in 112ms (compile: 6ms, render: 106ms)
+ GET /dashboard?metric=entregas 200 in 204ms (compile: 10ms, render: 194ms)
+ GET /dashboard?metric=entregas 200 in 205ms (compile: 1734µs, render: 204ms)
+ GET /dashboard?metric=entregas 200 in 206ms (compile: 22ms, render: 183ms)
+ GET /dashboard?metric=entregas 200 in 155ms (compile: 5ms, render: 150ms)
+ GET /dashboard?metric=entregas 200 in 130ms (compile: 12ms, render: 119ms)
+ GET /dashboard?metric=entregas 200 in 134ms (compile: 4ms, render: 130ms)
+ GET /facturacion 200 in 349ms (compile: 271ms, render: 78ms)
+ GET /gestor 200 in 150ms (compile: 101ms, render: 49ms)
+ GET /gestor?tab=tarifas 200 in 1037ms (compile: 5ms, render: 1032ms)
+ GET /facturacion 200 in 62ms (compile: 18ms, render: 44ms)
+✓ Compiled in 37ms
+ GET /facturacion 200 in 396ms (compile: 296ms, render: 100ms)
+ GET /facturacion 200 in 380ms (compile: 274ms, render: 107ms)
+ GET /facturacion?tab=crear-factura&from=2026-02-02&to=2026-03-04&q=&plate= 200 in 935ms (compile: 12ms, render: 923ms)
+ GET /gestor 200 in 183ms (compile: 17ms, render: 165ms)
+ GET /gestor?tab=sucursales 200 in 311ms (compile: 4ms, render: 306ms)
+✓ Compiled in 21ms
+✓ Compiled in 101ms
+✓ Compiled in 58ms
+✓ Compiled in 318ms
+ GET /gestor?tab=sucursales 200 in 1209ms (compile: 196ms, render: 1013ms)
+ GET /gestor?tab=sucursales 200 in 1187ms (compile: 537ms, render: 650ms)
+ GET /gestor?tab=sucursales 200 in 632ms (compile: 343ms, render: 288ms)
+ GET /gestor?tab=sucursales 200 in 642ms (compile: 463ms, render: 179ms)
+ GET /gestor?tab=sucursales 200 in 637ms (compile: 421ms, render: 217ms)
+ GET /gestor?tab=sucursales 200 in 708ms (compile: 545ms, render: 163ms)
+ GET /gestor?tab=sucursales 200 in 183ms (compile: 6ms, render: 177ms)
+ GET /gestor?tab=sucursales 200 in 169ms (compile: 3ms, render: 165ms)
+ GET /gestor?tab=sucursales 200 in 163ms (compile: 15ms, render: 149ms)
+ GET /gestor?tab=sucursales 200 in 151ms (compile: 10ms, render: 140ms)
+ GET /gestor?tab=sucursales 200 in 122ms (compile: 3ms, render: 119ms)
+ GET /gestor?tab=sucursales 200 in 153ms (compile: 20ms, render: 132ms)
+ GET /gestor?tab=sucursales 200 in 161ms (compile: 17ms, render: 145ms)
+ GET /gestor?tab=sucursales 200 in 163ms (compile: 2ms, render: 161ms)
+ GET /gestor?tab=sucursales 200 in 159ms (compile: 10ms, render: 150ms)
+ GET /gestor?tab=sucursales 200 in 161ms (compile: 1944µs, render: 159ms)
+ GET /gestor?tab=sucursales 200 in 138ms (compile: 10ms, render: 128ms)
+ GET /gestor?tab=sucursales 200 in 148ms (compile: 1935µs, render: 146ms)
+ GET /gestor?tab=sucursales 200 in 149ms (compile: 1424µs, render: 148ms)
+ GET /gestor?tab=sucursales 200 in 150ms (compile: 9ms, render: 141ms)
+ GET /gestor?tab=sucursales 200 in 142ms (compile: 2ms, render: 140ms)
+ GET /gestor?tab=sucursales 200 in 145ms (compile: 11ms, render: 134ms)
+ GET /gestor?tab=sucursales 200 in 149ms (compile: 17ms, render: 132ms)
+ GET /gestor?tab=sucursales 200 in 160ms (compile: 1442µs, render: 158ms)
+ GET /gestor?tab=sucursales 200 in 154ms (compile: 1427µs, render: 153ms)
+ GET /gestor?tab=sucursales 200 in 146ms (compile: 1346µs, render: 144ms)
+ GET /gestor?tab=sucursales 200 in 159ms (compile: 3ms, render: 156ms)
+ GET /gestor?tab=sucursales 200 in 136ms (compile: 3ms, render: 133ms)
+ GET /gestor?tab=sucursales 200 in 133ms (compile: 1624µs, render: 131ms)
+ GET /gestor?tab=sucursales 200 in 148ms (compile: 11ms, render: 137ms)
+ GET /gestor?tab=sucursales 200 in 154ms (compile: 1213µs, render: 153ms)
+ GET /gestor?tab=sucursales 200 in 139ms (compile: 1258µs, render: 138ms)
+ GET /gestor?tab=sucursales 200 in 117ms (compile: 2ms, render: 115ms)
+ GET /gestor?tab=sucursales 200 in 128ms (compile: 1651µs, render: 126ms)
+ GET /gestor?tab=sucursales 200 in 100ms (compile: 1639µs, render: 98ms)
+ GET /gestor?tab=sucursales 200 in 100ms (compile: 9ms, render: 91ms)
+ GET /gestor?tab=sucursales 200 in 321ms (compile: 193ms, render: 128ms)
+ GET /gestor?tab=sucursales 200 in 325ms (compile: 186ms, render: 139ms)
+ GET /gestor?tab=sucursales 200 in 323ms (compile: 208ms, render: 114ms)
+ GET /gestor?tab=sucursales 200 in 322ms (compile: 225ms, render: 97ms)
+ GET /gestor?tab=sucursales 200 in 325ms (compile: 88ms, render: 237ms)
+ GET /gestor?tab=sucursales 200 in 325ms (compile: 200ms, render: 124ms)
+ GET /gestor?tab=sucursales 200 in 74ms (compile: 10ms, render: 64ms)
+ GET /gestor?tab=sucursales 200 in 75ms (compile: 2ms, render: 73ms)
+ GET /gestor?tab=sucursales 200 in 75ms (compile: 19ms, render: 56ms)
+✓ Compiled in 79ms
+ GET /gestor?tab=sucursales 200 in 38ms (compile: 1743µs, render: 36ms)
+✓ Compiled in 34ms
+ GET /gestor?tab=sucursales 200 in 75ms (compile: 4ms, render: 71ms)
+ GET /configuracion 200 in 317ms (compile: 259ms, render: 58ms)
+ GET /configuracion?tab=fiscal&subtab=facturacion 200 in 438ms (compile: 10ms, render: 428ms)
+ GET /configuracion?tab=fiscal&subtab=facturacion 200 in 191ms (compile: 115ms, render: 76ms)
+✓ Compiled in 95ms
+ GET /configuracion?tab=fiscal&subtab=facturacion 200 in 128ms (compile: 7ms, render: 121ms)
+ GET /configuracion?tab=branding&subtab=logo 200 in 244ms (compile: 11ms, render: 233ms)
+ GET /configuracion?tab=branding&subtab=colores 200 in 143ms (compile: 4ms, render: 139ms)
+ GET /configuracion?tab=branding&subtab=contratos 200 in 140ms (compile: 5ms, render: 135ms)
+ GET /configuracion?tab=identidad&subtab=basico 200 in 225ms (compile: 14ms, render: 211ms)
+ GET /dashboard 200 in 158ms (compile: 103ms, render: 55ms)
+ GET /dashboard?metric=entregas 200 in 77ms (compile: 12ms, render: 65ms)
+ GET /dashboard?metric=entregas 200 in 78ms (compile: 21ms, render: 56ms)
+ GET /reservas 200 in 159ms (compile: 100ms, render: 59ms)
+ GET /reservas?tab=entregas 200 in 590ms (compile: 4ms, render: 586ms)
+ GET /reservas?tab=recogidas 200 in 627ms (compile: 3ms, render: 624ms)
+ GET /clientes 200 in 182ms (compile: 108ms, render: 74ms)
+ GET /clientes?tab=listado 200 in 498ms (compile: 2ms, render: 496ms)
+ GET /facturacion 200 in 248ms (compile: 156ms, render: 92ms)
+ GET /facturacion?tab=crear-factura&from=2026-02-02&to=2026-03-04&q=&plate=&invoiceType=F 200 in 884ms (compile: 6ms, render: 878ms)
+✓ Compiled in 41ms
+ GET /facturacion?tab=crear-factura&from=2026-02-02&to=2026-03-04&q=&plate=&invoiceType=F 200 in 358ms (compile: 232ms, render: 126ms)
+ GET /facturacion?tab=crear-factura&from=2026-02-02&to=2026-03-04&q=&plate=&invoiceType=F 200 in 325ms (compile: 228ms, render: 97ms)
+ GET /facturacion?tab=crear-factura&from=2026-02-02&to=2026-03-04&q=&plate=&invoiceType=V 200 in 198ms (compile: 6ms, render: 192ms)
+ GET /facturacion?tab=crear-factura&from=2026-02-02&to=2026-03-04&q=&plate=&invoiceType=R 200 in 57ms (compile: 7ms, render: 50ms)
+ GET /facturacion?tab=crear-factura&from=2026-02-02&to=2026-03-04&q=&plate=&invoiceType=A 200 in 72ms (compile: 3ms, render: 69ms)
+ GET /facturacion?tab=crear-factura&from=2026-02-02&to=2026-03-04&q=&plate=&invoiceType=A 200 in 455ms (compile: 371ms, render: 84ms)
+ GET /facturacion?tab=crear-factura&from=2026-02-02&to=2026-03-04&q=&plate=&invoiceType=A 200 in 459ms (compile: 261ms, render: 198ms)
+ GET /facturacion?tab=crear-factura&from=2026-02-02&to=2026-03-04&q=&plate=&invoiceType=A 200 in 459ms (compile: 353ms, render: 106ms)
+ GET /facturacion?tab=crear-factura&from=2026-02-02&to=2026-03-04&q=&plate=&invoiceType=A 200 in 467ms (compile: 363ms, render: 104ms)
+ GET /facturacion?tab=crear-factura&from=2026-02-02&to=2026-03-04&q=&plate=&invoiceType=A 200 in 466ms (compile: 392ms, render: 74ms)
+ GET /facturacion?tab=crear-factura&from=2026-02-02&to=2026-03-04&q=&plate=&invoiceType=A 200 in 467ms (compile: 402ms, render: 65ms)
+ GET /facturacion?tab=crear-factura&from=2026-02-02&to=2026-03-04&q=&plate=&invoiceType=A 200 in 53ms (compile: 18ms, render: 34ms)
+ GET /facturacion?tab=crear-factura&from=2026-02-02&to=2026-03-04&q=&plate=&invoiceType=A 200 in 53ms (compile: 10ms, render: 43ms)
+ GET /facturacion?tab=crear-factura&from=2026-02-02&to=2026-03-04&q=&plate=&invoiceType=A 200 in 54ms (compile: 1672µs, render: 52ms)
+ GET /facturacion?tab=facturas&from=2026-02-02&to=2026-03-04&q=&plate= 200 in 263ms (compile: 3ms, render: 260ms)
+ GET /contratos 200 in 148ms (compile: 101ms, render: 47ms)
+ GET /clientes 200 in 140ms (compile: 96ms, render: 44ms)
+ GET /clientes 200 in 422ms (compile: 116ms, render: 306ms)
+ GET /clientes 200 in 161ms (compile: 12ms, render: 149ms)
+ GET /clientes 200 in 161ms (compile: 29ms, render: 133ms)
+ GET /clientes 200 in 163ms (compile: 3ms, render: 161ms)
+ GET /clientes 200 in 136ms (compile: 22ms, render: 114ms)
+ GET /clientes 200 in 169ms (compile: 23ms, render: 146ms)
+ GET /clientes 200 in 78ms (compile: 2ms, render: 76ms)
+ GET /clientes 200 in 79ms (compile: 19ms, render: 59ms)
+ GET /clientes 200 in 47ms (compile: 3ms, render: 44ms)
+✓ Compiled in 409ms
+ GET /clientes 200 in 362ms (compile: 245ms, render: 118ms)
+ GET /clientes 200 in 307ms (compile: 133ms, render: 174ms)
+ GET /clientes 200 in 120ms (compile: 19ms, render: 101ms)
+ GET /clientes 200 in 122ms (compile: 2ms, render: 120ms)
+ GET /clientes 200 in 95ms (compile: 4ms, render: 91ms)
+ GET /clientes 200 in 95ms (compile: 19ms, render: 76ms)
+ GET /clientes 200 in 56ms (compile: 3ms, render: 53ms)
+ GET /clientes 200 in 57ms (compile: 12ms, render: 45ms)
+ GET /clientes 200 in 33ms (compile: 1942µs, render: 31ms)
+ GET /clientes 200 in 250ms (compile: 85ms, render: 165ms)
+ GET /clientes 200 in 101ms (compile: 4ms, render: 97ms)
+ GET /clientes 200 in 100ms (compile: 26ms, render: 73ms)
+ GET /clientes 200 in 92ms (compile: 11ms, render: 81ms)
+ GET /clientes 200 in 84ms (compile: 11ms, render: 73ms)
+ GET /clientes 200 in 83ms (compile: 19ms, render: 64ms)
+ GET /clientes 200 in 58ms (compile: 1976µs, render: 56ms)
+ GET /clientes 200 in 30ms (compile: 1663µs, render: 28ms)
+ GET /clientes 200 in 41ms (compile: 3ms, render: 39ms)
+ GET /clientes 200 in 289ms (compile: 136ms, render: 153ms)
+ GET /clientes 200 in 290ms (compile: 90ms, render: 200ms)
+ GET /clientes 200 in 144ms (compile: 23ms, render: 121ms)
+ GET /clientes 200 in 289ms (compile: 146ms, render: 143ms)
+ GET /clientes 200 in 123ms (compile: 28ms, render: 94ms)
+ GET /clientes 200 in 96ms (compile: 10ms, render: 85ms)
+ GET /clientes 200 in 60ms (compile: 1682µs, render: 58ms)
+ GET /clientes 200 in 60ms (compile: 13ms, render: 47ms)
+ GET /clientes 200 in 60ms (compile: 35ms, render: 25ms)
+✓ Compiled in 95ms
+✓ Compiled in 78ms
+✓ Compiled in 93ms
+✓ Compiled in 134ms
+ GET /clientes 200 in 638ms (compile: 270ms, render: 368ms)
+ GET /clientes 200 in 278ms (compile: 4ms, render: 274ms)
+ GET /clientes 200 in 256ms (compile: 34ms, render: 223ms)
+ GET /clientes 200 in 255ms (compile: 61ms, render: 193ms)
+ GET /clientes 200 in 263ms (compile: 10ms, render: 253ms)
+ GET /clientes 200 in 210ms (compile: 41ms, render: 169ms)
+ GET /clientes 200 in 130ms (compile: 4ms, render: 126ms)
+ GET /clientes 200 in 100ms (compile: 4ms, render: 95ms)
+ GET /clientes 200 in 97ms (compile: 22ms, render: 75ms)
+ GET /clientes 200 in 100ms (compile: 3ms, render: 97ms)
+ GET /clientes 200 in 98ms (compile: 13ms, render: 85ms)
+ GET /clientes 200 in 123ms (compile: 4ms, render: 120ms)
+ GET /clientes 200 in 129ms (compile: 3ms, render: 125ms)
+ GET /clientes 200 in 126ms (compile: 2ms, render: 124ms)
+ GET /clientes 200 in 111ms (compile: 15ms, render: 96ms)
+ GET /clientes 200 in 115ms (compile: 5ms, render: 110ms)
+ GET /clientes 200 in 114ms (compile: 27ms, render: 87ms)
+ GET /clientes 200 in 101ms (compile: 1547µs, render: 100ms)
+ GET /clientes 200 in 100ms (compile: 1242µs, render: 98ms)
+ GET /clientes 200 in 87ms (compile: 2ms, render: 84ms)
+ GET /clientes 200 in 86ms (compile: 2ms, render: 84ms)
+ GET /clientes 200 in 86ms (compile: 17ms, render: 69ms)
+ GET /clientes 200 in 86ms (compile: 24ms, render: 62ms)
+ GET /clientes 200 in 103ms (compile: 1779µs, render: 101ms)
+ GET /clientes 200 in 135ms (compile: 1713µs, render: 133ms)
+ GET /clientes 200 in 126ms (compile: 3ms, render: 123ms)
+ GET /clientes 200 in 129ms (compile: 1929µs, render: 127ms)
+ GET /clientes 200 in 130ms (compile: 10ms, render: 119ms)
+ GET /clientes 200 in 139ms (compile: 24ms, render: 115ms)
+ GET /clientes 200 in 114ms (compile: 20ms, render: 94ms)
+ GET /clientes 200 in 292ms (compile: 3ms, render: 289ms)
+ GET /clientes 200 in 295ms (compile: 3ms, render: 292ms)
+ GET /clientes 200 in 311ms (compile: 9ms, render: 302ms)
+ GET /clientes 200 in 313ms (compile: 18ms, render: 295ms)
+ GET /clientes 200 in 314ms (compile: 1640µs, render: 312ms)
+ GET /clientes 200 in 271ms (compile: 6ms, render: 264ms)
+ GET /clientes 200 in 269ms (compile: 123ms, render: 146ms)
+ GET /clientes 200 in 92ms (compile: 16ms, render: 76ms)
+ GET /clientes 200 in 92ms (compile: 50ms, render: 42ms)
+ GET /clientes 200 in 94ms (compile: 26ms, render: 68ms)
+ GET /clientes 200 in 93ms (compile: 42ms, render: 52ms)
+ GET /clientes 200 in 106ms (compile: 4ms, render: 102ms)
+ GET /clientes 200 in 76ms (compile: 3ms, render: 72ms)
+ GET /clientes 200 in 62ms (compile: 16ms, render: 46ms)
+ GET /clientes 200 in 63ms (compile: 1293µs, render: 62ms)
+ GET /clientes 200 in 340ms (compile: 101ms, render: 239ms)
+ GET /clientes 200 in 339ms (compile: 215ms, render: 124ms)
+ GET /clientes 200 in 116ms (compile: 12ms, render: 104ms)
+ GET /clientes 200 in 127ms (compile: 12ms, render: 116ms)
+ GET /clientes 200 in 108ms (compile: 12ms, render: 96ms)
+ GET /clientes 200 in 99ms (compile: 23ms, render: 76ms)
+ GET /clientes 200 in 66ms (compile: 11ms, render: 55ms)
+ GET /clientes 200 in 67ms (compile: 3ms, render: 65ms)
+ GET /clientes 200 in 67ms (compile: 24ms, render: 43ms)
+ GET /clientes 200 in 125ms (compile: 4ms, render: 121ms)
+ GET /clientes 200 in 263ms (compile: 89ms, render: 174ms)
+ GET /clientes 200 in 124ms (compile: 51ms, render: 73ms)
+ GET /clientes 200 in 126ms (compile: 25ms, render: 100ms)
+ GET /clientes 200 in 60ms (compile: 12ms, render: 48ms)
+ GET /clientes 200 in 104ms (compile: 44ms, render: 60ms)
+ GET /clientes 200 in 59ms (compile: 2ms, render: 57ms)
+ GET /clientes 200 in 59ms (compile: 21ms, render: 38ms)
+ GET /clientes 200 in 58ms (compile: 29ms, render: 29ms)
+✓ Compiled in 52ms
+ GET /clientes 200 in 45ms (compile: 3ms, render: 42ms)
+✓ Compiled in 51ms
+ GET /clientes 200 in 68ms (compile: 4ms, render: 64ms)
+✓ Compiled in 59ms
+ GET /clientes 200 in 72ms (compile: 4ms, render: 68ms)
+ GET /clientes?tab=comisiones 200 in 552ms (compile: 11ms, render: 541ms)
+ GET /dashboard 200 in 171ms (compile: 108ms, render: 64ms)
+ GET /dashboard?metric=entregas 200 in 100ms (compile: 26ms, render: 73ms)
+ GET /dashboard?metric=entregas 200 in 105ms (compile: 5ms, render: 100ms)
+✓ Compiled in 48ms
+ GET /dashboard?metric=entregas 200 in 227ms (compile: 117ms, render: 110ms)
+ GET /reservas 200 in 138ms (compile: 89ms, render: 50ms)
+ GET /contratos 200 in 143ms (compile: 97ms, render: 45ms)
+✓ Compiled in 38ms
+ GET /contratos 200 in 73ms (compile: 4ms, render: 69ms)
+ GET /vehiculos 200 in 307ms (compile: 200ms, render: 106ms)
+ GET /reservas 200 in 40ms (compile: 5ms, render: 35ms)
+ GET /contratos 200 in 34ms (compile: 5ms, render: 28ms)
+ GET /facturacion 200 in 626ms (compile: 542ms, render: 84ms)
+ GET /clientes 200 in 57ms (compile: 6ms, render: 51ms)
+ GET /vehiculos 200 in 30ms (compile: 3ms, render: 26ms)
+ GET /contratos 200 in 46ms (compile: 6ms, render: 40ms)
+ GET /configuracion 200 in 241ms (compile: 180ms, render: 61ms)
+ GET /ayuda 200 in 111ms (compile: 74ms, render: 36ms)
+ GET /gestor 200 in 179ms (compile: 97ms, render: 82ms)
+ GET /facturacion 200 in 37ms (compile: 5ms, render: 32ms)
+ GET /clientes 200 in 41ms (compile: 6ms, render: 35ms)
+ GET /vehiculos 200 in 71ms (compile: 7ms, render: 64ms)
+ GET /contratos 200 in 33ms (compile: 7ms, render: 26ms)
+ GET /facturacion 200 in 108ms (compile: 11ms, render: 97ms)
+ GET /facturacion?tab=crear-factura&from=2026-02-02&to=2026-03-04&q=&plate=&invoiceType=F 200 in 754ms (compile: 7ms, render: 747ms)
+✓ Compiled in 40ms
+✓ Compiled in 105ms
+✓ Compiled in 15ms
+✓ Compiled in 49ms
+⚠ Fast Refresh had to perform a full reload when ./src/components/theme-provider.tsx changed. Read more: https://nextjs.org/docs/messages/fast-refresh-reload
+⚠ Fast Refresh had to perform a full reload when ./src/components/theme-provider.tsx changed. Read more: https://nextjs.org/docs/messages/fast-refresh-reload
+⚠ Fast Refresh had to perform a full reload when ./src/components/theme-provider.tsx changed. Read more: https://nextjs.org/docs/messages/fast-refresh-reload
+ GET /facturacion?tab=crear-factura&from=2026-02-02&to=2026-03-04&q=&plate=&invoiceType=F 200 in 733ms (compile: 4ms, render: 729ms)
+✓ Compiled in 57ms
+✓ Compiled in 32ms
+✓ Compiled in 19ms
+✓ Compiled in 39ms
+ GET /dashboard 200 in 259ms (compile: 146ms, render: 113ms)
+ GET /dashboard?metric=entregas 200 in 116ms (compile: 4ms, render: 111ms)
+ GET /dashboard?metric=entregas 200 in 115ms (compile: 47ms, render: 68ms)
+ GET /contratos 200 in 174ms (compile: 113ms, render: 60ms)
+⚠ Fast Refresh had to perform a full reload when ./src/components/theme-provider.tsx changed. Read more: https://nextjs.org/docs/messages/fast-refresh-reload
+ GET /reservas 200 in 157ms (compile: 88ms, render: 69ms)
+✓ Compiled in 0ms
+ GET /contratos 200 in 494ms (compile: 113ms, render: 382ms)
+ GET /contratos 200 in 307ms (compile: 130ms, render: 177ms)
+ GET /contratos 200 in 115ms (compile: 2ms, render: 113ms)
+ GET /contratos 200 in 114ms (compile: 27ms, render: 87ms)
+ GET /contratos 200 in 89ms (compile: 13ms, render: 76ms)
+ GET /contratos 200 in 109ms (compile: 31ms, render: 78ms)
+ GET /contratos 200 in 92ms (compile: 18ms, render: 74ms)
+ GET /contratos 200 in 97ms (compile: 1771µs, render: 96ms)
+ GET /contratos 200 in 97ms (compile: 32ms, render: 65ms)
+ GET /contratos 200 in 98ms (compile: 10ms, render: 87ms)
+ GET /contratos 200 in 68ms (compile: 14ms, render: 54ms)
+ GET /contratos 200 in 40ms (compile: 5ms, render: 36ms)
+ GET /contratos 200 in 37ms (compile: 19ms, render: 18ms)
+✓ Compiled in 22ms
+✓ Compiled in 95ms
+✓ Compiled in 32ms
+✓ Compiled in 23ms
+ GET /contratos 200 in 337ms (compile: 150ms, render: 188ms)
+✓ Compiled in 20ms
+ GET /contratos 200 in 314ms (compile: 134ms, render: 180ms)
+✓ Compiled in 22ms
+ GET /contratos 200 in 194ms (compile: 93ms, render: 101ms)
+ GET /contratos 200 in 126ms (compile: 7ms, render: 119ms)
+ GET /dashboard 200 in 192ms (compile: 118ms, render: 74ms)
+ GET /dashboard?metric=entregas 200 in 69ms (compile: 1869µs, render: 68ms)
+ GET /dashboard?metric=entregas 200 in 70ms (compile: 9ms, render: 61ms)
+ GET /dashboard?metric=entregas 200 in 761ms (compile: 5ms, render: 757ms)
+ GET /dashboard 200 in 85ms (compile: 1212µs, render: 84ms)
+ GET /dashboard?metric=entregas 200 in 32ms (compile: 2ms, render: 29ms)
+ GET /dashboard 200 in 124ms (compile: 3ms, render: 121ms)
+ GET /dashboard?metric=entregas 200 in 38ms (compile: 4ms, render: 35ms)
+✓ Compiled in 19ms
+✓ Compiled in 17ms
+ GET /dashboard?metric=entregas 200 in 345ms (compile: 104ms, render: 241ms)
+ GET /vehiculos 200 in 276ms (compile: 183ms, render: 93ms)
+ GET /facturacion 200 in 975ms (compile: 228ms, render: 747ms)
+ GET /clientes 200 in 155ms (compile: 96ms, render: 59ms)
+✓ Compiled in 21ms
+ GET /clientes 200 in 411ms (compile: 38ms, render: 373ms)
+✓ Compiled in 27ms
+✓ Compiled in 54ms
+ GET /clientes 200 in 401ms (compile: 204ms, render: 197ms)
+[?25h

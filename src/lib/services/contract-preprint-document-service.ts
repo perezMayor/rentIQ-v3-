@@ -1,3 +1,4 @@
+// Servicio de negocio para contract preprint document service.
 import { getDocumentCompanyName } from "@/lib/company-brand";
 import type { TemplateDocument } from "@/lib/domain/rental";
 import { readRentalData } from "@/lib/services/rental-store";

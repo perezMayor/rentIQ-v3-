@@ -1,3 +1,4 @@
+// Endpoint HTTP de reporting/facturas/export.
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { listInvoiceJournal } from "@/lib/services/rental-service";
@@ -11,6 +12,9 @@ export async function GET(request: Request) {
   const user = await getSessionUser();
   if (!user) {
     return NextResponse.json({ error: "No autenticado" }, { status: 401 });
+  }
+  if (user.role === "LECTOR") {
+    return NextResponse.json({ error: "Permiso denegado" }, { status: 403 });
   }
 
   const today = new Date().toISOString().slice(0, 10);
@@ -27,7 +31,7 @@ export async function GET(request: Request) {
       [
         invoice.invoiceNumber,
         invoice.invoiceName,
-        invoice.contractId,
+        invoice.contractId ?? "MANUAL",
         invoice.issuedAt,
         invoice.baseAmount.toFixed(2),
         invoice.extrasAmount.toFixed(2),

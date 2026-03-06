@@ -1,3 +1,4 @@
+// Endpoint HTTP de contratos/[contractId]/pdf.
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { buildContractDocument } from "@/lib/services/contract-document-service";
@@ -17,6 +18,9 @@ export async function GET(_: Request, context: { params: Promise<{ contractId: s
       headers: {
         "Content-Type": "application/pdf",
         "Content-Disposition": `attachment; filename=\"${document.contract.contractNumber}.pdf\"`,
+        "Cache-Control": "no-store, no-cache, must-revalidate",
+        Pragma: "no-cache",
+        Expires: "0",
       },
     });
   } catch (error) {

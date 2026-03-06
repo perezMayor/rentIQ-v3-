@@ -1,15 +1,23 @@
+// Página del módulo planning-completo.
 import { redirect } from "next/navigation";
 import { getSessionUser } from "@/lib/auth";
-import { listPlanning } from "@/lib/services/rental-service";
+import { getCompanySettings, listPlanning } from "@/lib/services/rental-service";
+import { PlanningCellLink } from "@/app/planning-completo/planning-cell-link";
 import styles from "./planning-completo-v2.module.css";
 
 type Props = {
-  searchParams: Promise<{ start?: string; period?: string; plate?: string; group?: string; model?: string; selected?: string }>;
+  searchParams: Promise<{ start?: string; period?: string; plate?: string; group?: string; model?: string; branch?: string; selected?: string }>;
 };
 
 type CellData = {
   status: "" | "PETICION" | "RESERVA_CONFIRMADA" | "CONTRATADO" | "RESERVA_HUERFANA" | "NO_DISPONIBLE" | "BLOQUEADO";
   selectedId: string;
+  reservationId: string;
+  groupLabel: string;
+  isReservable: boolean;
+  openHref: string;
+  contractHref: string;
+  auditHref: string;
   overlap: boolean;
   title: string;
   segment: "single" | "start" | "middle" | "end" | "none";
@@ -87,6 +95,21 @@ function statusColor(status: CellData["status"]) {
   }
 }
 
+function buildOpenHref(item: {
+  type: "RESERVA" | "BLOQUEO";
+  status: string;
+  referenceId: string;
+  contractId: string | null;
+}) {
+  if (item.type !== "RESERVA") {
+    return "/reservas?tab=planning&planningSubtab=bloqueos";
+  }
+  if (item.status === "CONTRATADO" && item.contractId) {
+    return `/contratos?tab=gestion&contractId=${encodeURIComponent(item.contractId)}`;
+  }
+  return `/reservas?tab=gestion&reservationId=${encodeURIComponent(item.referenceId)}`;
+}
+
 export default async function PlanningCompletoPage({ searchParams }: Props) {
   const user = await getSessionUser();
   if (!user) redirect("/login");
@@ -99,15 +122,20 @@ export default async function PlanningCompletoPage({ searchParams }: Props) {
   const plate = params.plate ?? "";
   const group = params.group ?? "";
   const model = params.model ?? "";
+  const branch = params.branch ?? "";
   const selected = params.selected ?? "";
 
-  const planning = await listPlanning({
-    startDate: start,
-    periodDays: period,
-    plateFilter: plate,
-    groupFilter: group,
-    modelFilter: model,
-  });
+  const [planning, companySettings] = await Promise.all([
+    listPlanning({
+      startDate: start,
+      periodDays: period,
+      plateFilter: plate,
+      groupFilter: group,
+      modelFilter: model,
+      branchFilter: branch,
+    }),
+    getCompanySettings(),
+  ]);
 
   const planningDays = buildPlanningDays(start, period);
   const monthHeaders = planningDays.reduce<Array<{ label: string; span: number }>>((acc, day) => {
@@ -127,7 +155,19 @@ export default async function PlanningCompletoPage({ searchParams }: Props) {
         const cells: CellData[] = planningDays.map((day) => {
           const dayItems = row.items.filter((item) => overlapsDay(item.startAt, item.endAt, day.startAt, day.endAt));
           if (dayItems.length === 0) {
-            return { status: "", selectedId: "", overlap: false, title: "Disponible", segment: "none" };
+            return {
+              status: "",
+              selectedId: "",
+              reservationId: "",
+              groupLabel: row.items[0]?.groupLabel ?? "",
+              isReservable: false,
+              openHref: "",
+              contractHref: "",
+              auditHref: "",
+              overlap: false,
+              title: "Disponible",
+              segment: "none",
+            };
           }
           const sorted = dayItems.toSorted((a, b) => statusPriority(a.status) - statusPriority(b.status));
           const main = sorted[0];
@@ -137,6 +177,17 @@ export default async function PlanningCompletoPage({ searchParams }: Props) {
           return {
             status: main.status,
             selectedId: main.id,
+            reservationId: main.type === "RESERVA" ? main.referenceId : "",
+            groupLabel: main.groupLabel,
+            isReservable: main.type === "RESERVA",
+            openHref: buildOpenHref(main),
+            contractHref: main.contractId ? `/contratos?tab=gestion&contractId=${encodeURIComponent(main.contractId)}` : "",
+            auditHref:
+              main.type === "RESERVA"
+                ? main.contractId
+                  ? `/contratos?tab=historico&auditContractId=${encodeURIComponent(main.contractId)}`
+                  : `/reservas?tab=gestion&auditReservationId=${encodeURIComponent(main.referenceId)}`
+                : "/reservas?tab=planning&planningSubtab=bloqueos",
             overlap: dayItems.some((item) => item.overlap) || dayItems.length > 1,
             title: `${main.label} | ${main.startAt.slice(0, 16)} -> ${main.endAt.slice(0, 16)}`,
             segment,
@@ -160,13 +211,32 @@ export default async function PlanningCompletoPage({ searchParams }: Props) {
     group: g.groupLabel,
     models: g.models.map((m) => ({ model: m.modelLabel, count: m.rows.length })),
   }));
+  const orphanDeficitByGroup = planning
+    .map((groupNode) => ({
+      group: groupNode.groupLabel,
+      deficit: groupNode.models.reduce(
+        (sum, modelNode) => sum + modelNode.rows.filter((row) => row.rowType === "HUERFANA").length,
+        0,
+      ),
+    }))
+    .filter((item) => item.deficit > 0)
+    .toSorted((a, b) => b.deficit - a.deficit || a.group.localeCompare(b.group));
 
-  const baseQuery = `start=${encodeURIComponent(start)}&period=${period}&plate=${encodeURIComponent(plate)}&group=${encodeURIComponent(group)}&model=${encodeURIComponent(model)}`;
+  const baseQuery = `start=${encodeURIComponent(start)}&period=${period}&plate=${encodeURIComponent(plate)}&group=${encodeURIComponent(group)}&model=${encodeURIComponent(model)}&branch=${encodeURIComponent(branch)}`;
   const leftWidth = 160;
   const rightWidth = selectedItem ? 300 : 0;
   const col1 = 52;
   const col2 = 20;
   const col3 = 68;
+  const prevStart = new Date(`${start}T00:00:00`);
+  prevStart.setDate(prevStart.getDate() - period);
+  const nextStart = new Date(`${start}T00:00:00`);
+  nextStart.setDate(nextStart.getDate() + period);
+  const actionBtnStyle = {
+    border: "1px solid #0f56b1",
+    background: "#1d69cb",
+    color: "#fff",
+  } as const;
 
   return (
     <main className={styles.page}>
@@ -175,8 +245,20 @@ export default async function PlanningCompletoPage({ searchParams }: Props) {
         style={{ gridTemplateColumns: selectedItem ? `${leftWidth}px 1fr ${rightWidth}px` : `${leftWidth}px 1fr` }}
       >
         <aside className={styles.leftPanel}>
-          <div className={styles.office}>OFICINA PRINCIPAL</div>
-          <form method="GET" className={styles.filters}>
+          <div className={styles.office}>
+            <label className={styles.officeLabel}>
+              Sucursal
+              <select form="planning-filters" name="branch" defaultValue={branch}>
+                <option value="">Todas</option>
+                {(companySettings.branches ?? []).map((item) => (
+                  <option key={item.code} value={item.code}>
+                    {item.code} · {item.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <form id="planning-filters" method="GET" className={styles.filters}>
             <label>
               Inicio
               <input name="start" type="date" defaultValue={start} />
@@ -217,18 +299,51 @@ export default async function PlanningCompletoPage({ searchParams }: Props) {
                 </ul>
               </details>
             ))}
+            <div className={styles.deficitWrap}>
+              <div className={styles.treeTitle}>DÉFICIT POR GRUPO</div>
+              {orphanDeficitByGroup.length === 0 ? (
+                <p className={styles.muted}>Sin déficit</p>
+              ) : (
+                <ul className={styles.deficitList}>
+                  {orphanDeficitByGroup.map((item) => (
+                    <li key={`deficit-${item.group}`}>
+                      {item.group} ({item.deficit})
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           </div>
 
-          <a
-            className={styles.backLink}
-            style={{ padding: "8px 10px", fontSize: "12px", minHeight: "34px", lineHeight: "1.2" }}
-            href={`/reservas?planningStart=${encodeURIComponent(start)}&planningPeriod=${period}&planningPlate=${encodeURIComponent(plate)}&planningGroup=${encodeURIComponent(group)}&planningModel=${encodeURIComponent(model)}`}
-          >
-            Volver a reservas
-          </a>
+          <div className={styles.backLinks}>
+            <a
+              className={styles.backLink}
+              style={actionBtnStyle}
+              href={`/reservas?planningStart=${encodeURIComponent(start)}&planningPeriod=${period}&planningPlate=${encodeURIComponent(plate)}&planningGroup=${encodeURIComponent(group)}&planningModel=${encodeURIComponent(model)}&planningBranch=${encodeURIComponent(branch)}`}
+            >
+              Reservas
+            </a>
+            <a className={styles.backLink} style={actionBtnStyle} href="/dashboard">
+              Dashboard
+            </a>
+          </div>
         </aside>
 
         <section className={styles.centerPanel}>
+          <div className={styles.quickNav}>
+            <a href={`/planning-completo?start=${encodeURIComponent(prevStart.toISOString().slice(0, 10))}&period=${period}&plate=${encodeURIComponent(plate)}&group=${encodeURIComponent(group)}&model=${encodeURIComponent(model)}&branch=${encodeURIComponent(branch)}`}>← Periodo anterior</a>
+            <a href={`/planning-completo?start=${encodeURIComponent(today)}&period=${period}&plate=${encodeURIComponent(plate)}&group=${encodeURIComponent(group)}&model=${encodeURIComponent(model)}&branch=${encodeURIComponent(branch)}`}>Hoy</a>
+            <a href={`/planning-completo?start=${encodeURIComponent(nextStart.toISOString().slice(0, 10))}&period=${period}&plate=${encodeURIComponent(plate)}&group=${encodeURIComponent(group)}&model=${encodeURIComponent(model)}&branch=${encodeURIComponent(branch)}`}>Periodo siguiente →</a>
+          </div>
+          <div className={`${styles.legend} ${styles.legendTop}`}>
+            <span><i className={`${styles.legendColor} ${styles.status_peticion}`} /> Petición</span>
+            <span><i className={`${styles.legendColor} ${styles.status_confirmada}`} /> Reserva</span>
+            <span><i className={`${styles.legendColor} ${styles.status_contratado}`} /> Contratado</span>
+            <span><i className={`${styles.legendColor} ${styles.status_huerfana}`} /> Huérfana</span>
+            <span><i className={`${styles.legendColor} ${styles.status_bloqueado}`} /> Bloqueado</span>
+            <span><i className={`${styles.legendColor} ${styles.status_nodisponible}`} /> No disponible</span>
+            <span className={styles.legendHint}>Doble clic o doble toque: abrir reserva/contrato</span>
+          </div>
           <div className={styles.ganttWrap}>
             <table className={styles.gantt}>
               <thead>
@@ -259,24 +374,42 @@ export default async function PlanningCompletoPage({ searchParams }: Props) {
                       const color = statusColor(cell.status);
                       const selectedClass = cell.selectedId && cell.selectedId === selected ? styles.selectedCell : "";
                       const hasBar = cell.segment !== "none";
+                      const dropTargetPlate = row.rowType === "MATRICULA" ? row.plateLabel : "";
+                      const interactive = hasBar;
                       return (
                         <td
                           key={`${rowIndex}-${cellIndex}`}
                           className={`${styles.cell} ${isSunday ? styles.sunday : ""} ${selectedClass}`}
                           title={cell.title}
                         >
-                          {hasBar ? (
-                            <a
-                              href={`/planning-completo?${baseQuery}&selected=${encodeURIComponent(cell.selectedId)}`}
-                              className={styles.cellLink}
-                              aria-label={cell.title}
-                            >
+                          <PlanningCellLink
+                            interactive={interactive}
+                            hasBar={hasBar}
+                            selectHref={
+                              cell.selectedId
+                                ? `/planning-completo?${baseQuery}&selected=${encodeURIComponent(cell.selectedId)}`
+                                : ""
+                            }
+                            openHref={
+                              cell.openHref || (cell.selectedId ? `/planning-completo?${baseQuery}&selected=${encodeURIComponent(cell.selectedId)}` : "")
+                            }
+                            contractHref={cell.contractHref}
+                            auditHref={cell.auditHref}
+                            dragReservationId={cell.isReservable ? cell.reservationId : ""}
+                            dragStatus={cell.status}
+                            dragGroup={cell.groupLabel}
+                            dropTargetPlate={dropTargetPlate}
+                            dropTargetGroup={row.groupLabel}
+                            className={styles.cellLink}
+                            title={`${cell.title}${hasBar ? " · Doble clic para abrir" : ""}${dropTargetPlate ? " · Arrastra aquí para reasignar" : ""}`}
+                          >
+                            {hasBar ? (
                               <span
                                 className={`${styles.bar} ${styles[`status_${token}`]} ${styles[`segment_${cell.segment}`]} ${cell.overlap ? styles.overlap : ""}`}
                                 style={{ backgroundColor: color, color }}
                               />
-                            </a>
-                          ) : null}
+                            ) : null}
+                          </PlanningCellLink>
                         </td>
                       );
                     })}

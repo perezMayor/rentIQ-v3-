@@ -2,10 +2,10 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getSessionUser } from "@/lib/auth";
 import { getDocumentCompanyName } from "@/lib/company-brand";
-import { getCompanySettings, updateCompanySettings } from "@/lib/services/rental-service";
+import { getCompanySettings, listContracts, listInvoices, updateCompanySettings } from "@/lib/services/rental-service";
 
 type ConfigTab = "identidad" | "branding" | "fiscal";
-type ConfigSubtab = "basico" | "contacto" | "logo" | "colores" | "facturacion" | "operativa";
+type ConfigSubtab = "basico" | "contacto" | "logo" | "colores" | "contratos" | "facturacion" | "operativa";
 
 type Props = {
   searchParams: Promise<{
@@ -13,6 +13,7 @@ type Props = {
     error?: string;
     tab?: string;
     subtab?: string;
+    branchCode?: string;
   }>;
 };
 
@@ -23,7 +24,7 @@ function normalizeTab(value: string): ConfigTab {
 
 function normalizeSubtab(tab: ConfigTab, value: string): ConfigSubtab {
   if (tab === "identidad") return value === "contacto" ? "contacto" : "basico";
-  if (tab === "branding") return value === "colores" ? "colores" : "logo";
+  if (tab === "branding") return value === "colores" || value === "contratos" ? (value as ConfigSubtab) : "logo";
   return value === "operativa" ? "operativa" : "facturacion";
 }
 
@@ -38,6 +39,15 @@ export default async function ConfiguracionPage({ searchParams }: Props) {
   const params = await searchParams;
   const tab = normalizeTab((params.tab ?? "identidad").toLowerCase());
   const subtab = normalizeSubtab(tab, (params.subtab ?? "").toLowerCase());
+  const selectedBranchCode = (params.branchCode ?? settings.branches[0]?.code ?? "").trim().toUpperCase();
+  const [contracts, invoices] = await Promise.all([listContracts(""), listInvoices("")]);
+  const contractsByBranch = contracts.filter((item) => item.branchCode.toUpperCase() === selectedBranchCode);
+  const invoicesByBranch = invoices.filter((item) => {
+    const linkedContract = contracts.find((contract) => contract.id === item.contractId);
+    return linkedContract?.branchCode.toUpperCase() === selectedBranchCode;
+  });
+  const lastContractNumber = contractsByBranch[0]?.contractNumber ?? "N/D";
+  const lastInvoiceNumber = invoicesByBranch[0]?.invoiceNumber ?? "N/D";
 
   async function saveSettingsAction(formData: FormData) {
     "use server";
@@ -65,6 +75,21 @@ export default async function ConfiguracionPage({ searchParams }: Props) {
       input.logoDataUrl = `data:${logoFile.type};base64,${buffer.toString("base64")}`;
     }
 
+    const contractBackFile = formData.get("contractBackFile");
+    if (contractBackFile instanceof File && contractBackFile.size > 0) {
+      const acceptedTypes = ["text/plain", "text/html", "text/markdown"];
+      if (!acceptedTypes.includes(contractBackFile.type)) {
+        redirect(`/configuracion?tab=${nextTab}&subtab=${nextSubtab}&error=Archivo+de+reverso+inválido+(solo+TXT,+MD+o+HTML)`);
+      }
+      const maxBytes = 2 * 1024 * 1024;
+      if (contractBackFile.size > maxBytes) {
+        redirect(`/configuracion?tab=${nextTab}&subtab=${nextSubtab}&error=Archivo+de+reverso+demasiado+grande+(max+2MB)`);
+      }
+      const rawText = Buffer.from(await contractBackFile.arrayBuffer()).toString("utf8").trim();
+      input.contractBackContent = rawText;
+      input.contractBackContentType = contractBackFile.type === "text/html" ? "HTML" : "TEXT";
+    }
+
     try {
       await updateCompanySettings(input, { id: actor.id, role: actor.role });
       revalidatePath("/configuracion");
@@ -78,17 +103,10 @@ export default async function ConfiguracionPage({ searchParams }: Props) {
 
   return (
     <div className="stack-lg">
-      <header className="stack-sm">
-        <h2>Configuración de la empresa</h2>
-        <p className="muted-text">Estructura por pestañas y subpestañas para mantener patrón operativo consistente.</p>
-      </header>
-
       {params.error ? <p className="danger-text">{params.error}</p> : null}
       {params.ok ? <p>{params.ok}</p> : null}
-      {!canWrite ? <p className="danger-text">Modo lectura: no puedes editar configuración.</p> : null}
-
       <section className="card stack-sm">
-        <div className="inline-actions-cell">
+        <div className="table-header-row">
           <a className={tab === "identidad" ? "primary-btn text-center" : "secondary-btn text-center"} href="/configuracion?tab=identidad&subtab=basico">Identidad</a>
           <a className={tab === "branding" ? "primary-btn text-center" : "secondary-btn text-center"} href="/configuracion?tab=branding&subtab=logo">Branding</a>
           <a className={tab === "fiscal" ? "primary-btn text-center" : "secondary-btn text-center"} href="/configuracion?tab=fiscal&subtab=facturacion">Fiscal y operativa</a>
@@ -98,7 +116,7 @@ export default async function ConfiguracionPage({ searchParams }: Props) {
       <section className="card stack-md">
         {tab === "identidad" ? (
           <>
-            <div className="inline-actions-cell">
+            <div className="table-header-row">
               <a className={subtab === "basico" ? "primary-btn text-center" : "secondary-btn text-center"} href="/configuracion?tab=identidad&subtab=basico">Básico</a>
               <a className={subtab === "contacto" ? "primary-btn text-center" : "secondary-btn text-center"} href="/configuracion?tab=identidad&subtab=contacto">Contacto</a>
             </div>
@@ -149,9 +167,10 @@ export default async function ConfiguracionPage({ searchParams }: Props) {
 
         {tab === "branding" ? (
           <>
-            <div className="inline-actions-cell">
+            <div className="table-header-row">
               <a className={subtab === "logo" ? "primary-btn text-center" : "secondary-btn text-center"} href="/configuracion?tab=branding&subtab=logo">Logo</a>
               <a className={subtab === "colores" ? "primary-btn text-center" : "secondary-btn text-center"} href="/configuracion?tab=branding&subtab=colores">Colores y pie</a>
+              <a className={subtab === "contratos" ? "primary-btn text-center" : "secondary-btn text-center"} href="/configuracion?tab=branding&subtab=contratos">Contratos</a>
             </div>
             {subtab === "logo" ? (
               <form action={saveSettingsAction} className="form-grid">
@@ -198,12 +217,54 @@ export default async function ConfiguracionPage({ searchParams }: Props) {
                 </div>
               </form>
             ) : null}
+            {subtab === "contratos" ? (
+              <form action={saveSettingsAction} className="form-grid">
+                <input type="hidden" name="tab" value="branding" />
+                <input type="hidden" name="subtab" value="contratos" />
+                <label className="col-span-2">
+                  Pie anverso de contrato
+                  <textarea
+                    name="contractFrontFooter"
+                    rows={3}
+                    defaultValue={settings.contractFrontFooter || settings.documentFooter || ""}
+                    disabled={!canWrite}
+                  />
+                </label>
+                <label>
+                  Tipo contenido reverso
+                  <select
+                    name="contractBackContentType"
+                    defaultValue={settings.contractBackContentType === "HTML" ? "HTML" : "TEXT"}
+                    disabled={!canWrite}
+                  >
+                    <option value="TEXT">Texto</option>
+                    <option value="HTML">HTML</option>
+                  </select>
+                </label>
+                <label>
+                  Cargar archivo reverso (TXT, MD o HTML)
+                  <input name="contractBackFile" type="file" accept=".txt,.md,.html,text/plain,text/markdown,text/html" disabled={!canWrite} />
+                </label>
+                <label className="col-span-2">
+                  Contenido reverso
+                  <textarea
+                    name="contractBackContent"
+                    rows={14}
+                    defaultValue={settings.contractBackContent || ""}
+                    disabled={!canWrite}
+                  />
+                </label>
+                <div className="col-span-2">
+                  <button className="primary-btn" type="submit" disabled={!canWrite}>Guardar</button>
+                </div>
+              </form>
+            ) : null}
           </>
         ) : null}
 
         {tab === "fiscal" ? (
           <>
-            <div className="inline-actions-cell">
+            <div className="table-header-row">
               <a className={subtab === "facturacion" ? "primary-btn text-center" : "secondary-btn text-center"} href="/configuracion?tab=fiscal&subtab=facturacion">Facturación</a>
               <a className={subtab === "operativa" ? "primary-btn text-center" : "secondary-btn text-center"} href="/configuracion?tab=fiscal&subtab=operativa">Operativa</a>
             </div>
@@ -239,27 +300,84 @@ export default async function ConfiguracionPage({ searchParams }: Props) {
                   Serie abonos (A)
                   <input name="invoiceSeriesA" defaultValue={settings.invoiceSeriesByType.A} disabled={!canWrite} />
                 </label>
+                <label className="col-span-2">
+                  Numeración de facturas
+                  <select
+                    name="invoiceNumberScope"
+                    defaultValue={settings.invoiceNumberScope === "GLOBAL" ? "GLOBAL" : "BRANCH"}
+                    disabled={!canWrite}
+                  >
+                    <option value="BRANCH">Por sucursal</option>
+                    <option value="GLOBAL">General</option>
+                  </select>
+                </label>
                 <div className="col-span-2">
                   <button className="primary-btn" type="submit" disabled={!canWrite}>Guardar</button>
                 </div>
               </form>
             ) : null}
             {subtab === "operativa" ? (
-              <form action={saveSettingsAction} className="form-grid">
-                <input type="hidden" name="tab" value="fiscal" />
-                <input type="hidden" name="subtab" value="operativa" />
-                <label>
-                  Retención backups (días)
-                  <input name="backupRetentionDays" type="number" min={1} defaultValue={settings.backupRetentionDays} disabled={!canWrite} />
-                </label>
-                <label className="col-span-2">
-                  Proveedores/propietarios de coche (1 por línea)
-                  <textarea name="providersRaw" rows={5} defaultValue={(settings.providers ?? []).join("\n")} disabled={!canWrite} />
-                </label>
-                <div className="col-span-2">
-                  <button className="primary-btn" type="submit" disabled={!canWrite}>Guardar</button>
+              <section className="stack-md">
+                <div className="table-header-row">
+                  <h3>Operativa de empresa</h3>
+                  <form method="GET" className="inline-search">
+                    <input type="hidden" name="tab" value="fiscal" />
+                    <input type="hidden" name="subtab" value="operativa" />
+                    <select name="branchCode" defaultValue={selectedBranchCode || ""}>
+                      {settings.branches.map((branch) => (
+                        <option key={branch.code} value={branch.code}>
+                          {branch.code} - {branch.name}
+                        </option>
+                      ))}
+                    </select>
+                    <button className="secondary-btn" type="submit">Aplicar sucursal</button>
+                  </form>
                 </div>
-              </form>
+
+                <form action={saveSettingsAction} className="form-grid">
+                  <input type="hidden" name="tab" value="fiscal" />
+                  <input type="hidden" name="subtab" value="operativa" />
+                  <label>
+                    Contratos autonumerados
+                    <input type="text" value="Activado por sucursal" readOnly />
+                  </label>
+                  <label>
+                    Impuesto
+                    <input type="text" value={`${settings.defaultIvaPercent.toFixed(2)}% - [IVA GENERAL]`} readOnly />
+                  </label>
+                  <label>
+                    Último contrato ({selectedBranchCode || "N/D"})
+                    <input type="text" value={lastContractNumber} readOnly />
+                  </label>
+                  <label>
+                    Última factura ({selectedBranchCode || "N/D"})
+                    <input type="text" value={lastInvoiceNumber} readOnly />
+                  </label>
+                  <label className="col-span-2">
+                    Formato de numeración activo (contratos y facturas)
+                    <input
+                      type="text"
+                      value={
+                        settings.invoiceNumberScope === "GLOBAL"
+                          ? "Contratos: AA/SUC/NNNN · Facturas: SERIE + 8 dígitos (global empresa)"
+                          : "Contratos: AA/SUC/NNNN · Facturas: SERIE + 8 dígitos (por sucursal)"
+                      }
+                      readOnly
+                    />
+                  </label>
+                  <label>
+                    Retención backups (días)
+                    <input name="backupRetentionDays" type="number" min={1} defaultValue={settings.backupRetentionDays} disabled={!canWrite} />
+                  </label>
+                  <label className="col-span-2">
+                    Proveedores/propietarios de coche (1 por línea)
+                    <textarea name="providersRaw" rows={5} defaultValue={(settings.providers ?? []).join("\n")} disabled={!canWrite} />
+                  </label>
+                  <div className="col-span-2">
+                    <button className="primary-btn" type="submit" disabled={!canWrite}>Guardar</button>
+                  </div>
+                </form>
+              </section>
             ) : null}
           </>
         ) : null}

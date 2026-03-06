@@ -1,3 +1,4 @@
+// Página del módulo gastos.
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getSessionUser } from "@/lib/auth";
@@ -108,19 +109,7 @@ export default async function GastosPage({ searchParams }: Props) {
 
   return (
     <div className="stack-lg">
-      <header className="stack-sm">
-        <h2>Gastos diarios</h2>
-        <p className="muted-text">
-          Registro interno por empleado y día. No impacta facturación ni contrato; sí se suma al coste por vehículo.
-        </p>
-        <p className="muted-text">
-          Regla activa: solo se admiten matrículas con alquiler activo en la fecha indicada.
-        </p>
-      </header>
-
       {params.error ? <p className="danger-text">{params.error}</p> : null}
-      {!canWrite ? <p className="danger-text">Modo lectura: no puedes registrar gastos.</p> : null}
-
       <section className="card stack-sm">
         <h3>Nuevo gasto diario</h3>
         <form method="GET" className="inline-search">

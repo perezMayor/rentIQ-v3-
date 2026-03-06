@@ -53,11 +53,6 @@ export default async function EntregasPage({ searchParams }: Props) {
 
   return (
     <div className="stack-lg">
-      <header className="stack-sm">
-        <h2>Entregas</h2>
-        <p className="muted-text">Listados por fecha/hora y filtro por sucursal.</p>
-      </header>
-
       <section className="card stack-sm">
         <form method="GET" className="inline-search">
           <input name="from" type="date" defaultValue={from} />

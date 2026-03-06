@@ -1,3 +1,4 @@
+// Endpoint HTTP de reporting/productividad/export.
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { getVehicleProductionSummary } from "@/lib/services/rental-service";

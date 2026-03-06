@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { SESSION_COOKIE, getSessionUser } from "@/lib/auth";
+import { BRANCH_COOKIE, SESSION_COOKIE, getSessionUser } from "@/lib/auth";
 import { appendAuditEvent } from "@/lib/audit";
 
 export async function POST(request: Request) {
@@ -20,7 +20,8 @@ export async function POST(request: Request) {
   // Tras POST usamos 303 para forzar navegación GET en destino.
   const response = NextResponse.redirect(new URL("/login", request.url), { status: 303 });
   // Invalidación explícita de cookie de sesión (sin Secure para entorno http local).
-  response.headers.set("Set-Cookie", `${SESSION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax`);
+  response.headers.append("Set-Cookie", `${SESSION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax`);
+  response.headers.append("Set-Cookie", `${BRANCH_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax`);
   return response;
 }
 

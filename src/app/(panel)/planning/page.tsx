@@ -1,3 +1,4 @@
+// Página del módulo planning.
 import { redirect } from "next/navigation";
 
 type Props = {

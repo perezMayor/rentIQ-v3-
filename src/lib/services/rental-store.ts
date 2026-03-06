@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { getDataDir } from "@/lib/data-dir";
-import type { Client, Contract, FleetVehicle, RentalData, Reservation, VehicleCategory, VehicleModel } from "@/lib/domain/rental";
+import type { Client, Contract, FleetVehicle, Invoice, RentalData, Reservation, VehicleCategory, VehicleModel } from "@/lib/domain/rental";
 
 // Estructura inicial del almacén local cuando aún no existe fichero persistido.
 const defaultData: RentalData = {
@@ -31,6 +31,9 @@ const defaultData: RentalData = {
     taxId: "N/D",
     fiscalAddress: "N/D",
     documentFooter: "",
+    contractFrontFooter: "",
+    contractBackContent: "",
+    contractBackContentType: "TEXT",
     logoDataUrl: "",
     brandPrimaryColor: "#2563eb",
     brandSecondaryColor: "#0f172a",
@@ -39,9 +42,11 @@ const defaultData: RentalData = {
     providers: [],
     backupRetentionDays: 90,
     invoiceSeriesByType: { F: "F", R: "R", V: "V", A: "A" },
+    invoiceNumberScope: "BRANCH",
     branches: [],
+    branchSchedules: {},
     contractNumberPattern: "aa-sucursal-numero",
-    invoiceNumberPattern: "aa-sucursal-numero",
+    invoiceNumberPattern: "serie-digitos-sucursal",
     updatedAt: new Date().toISOString(),
     updatedBy: "system",
   },
@@ -71,10 +76,11 @@ export async function readRentalData(): Promise<RentalData> {
     );
     const fleetVehicles = (parsed.fleetVehicles ?? []).map((vehicle) => normalizeFleetVehicle(vehicle as FleetVehicle));
     const contracts = (parsed.contracts ?? []).map((contract) => normalizeContract(contract as Contract));
+    const invoices = (parsed.invoices ?? []).map((invoice) => normalizeInvoice(invoice as Invoice));
     return {
       reservations,
       contracts,
-      invoices: parsed.invoices ?? [],
+      invoices,
       internalExpenses: parsed.internalExpenses ?? [],
       vehicleBlocks: parsed.vehicleBlocks ?? [],
       templates: parsed.templates ?? [],
@@ -98,6 +104,9 @@ export async function readRentalData(): Promise<RentalData> {
         taxId: parsed.companySettings?.taxId ?? "N/D",
         fiscalAddress: parsed.companySettings?.fiscalAddress ?? "N/D",
         documentFooter: parsed.companySettings?.documentFooter ?? "",
+        contractFrontFooter: parsed.companySettings?.contractFrontFooter ?? parsed.companySettings?.documentFooter ?? "",
+        contractBackContent: parsed.companySettings?.contractBackContent ?? "",
+        contractBackContentType: parsed.companySettings?.contractBackContentType === "HTML" ? "HTML" : "TEXT",
         logoDataUrl: parsed.companySettings?.logoDataUrl ?? "",
         brandPrimaryColor: parsed.companySettings?.brandPrimaryColor ?? "#2563eb",
         brandSecondaryColor: parsed.companySettings?.brandSecondaryColor ?? "#0f172a",
@@ -111,9 +120,14 @@ export async function readRentalData(): Promise<RentalData> {
           V: parsed.companySettings?.invoiceSeriesByType?.V ?? "V",
           A: parsed.companySettings?.invoiceSeriesByType?.A ?? "A",
         },
+        invoiceNumberScope: parsed.companySettings?.invoiceNumberScope === "GLOBAL" ? "GLOBAL" : "BRANCH",
         branches: parsed.companySettings?.branches ?? [],
+        branchSchedules: parsed.companySettings?.branchSchedules ?? {},
         contractNumberPattern: "aa-sucursal-numero",
-        invoiceNumberPattern: "aa-sucursal-numero",
+        invoiceNumberPattern:
+          parsed.companySettings?.invoiceNumberPattern === "serie-digitos-global"
+            ? "serie-digitos-global"
+            : "serie-digitos-sucursal",
         updatedAt: parsed.companySettings?.updatedAt ?? new Date().toISOString(),
         updatedBy: parsed.companySettings?.updatedBy ?? "system",
       },
@@ -155,12 +169,37 @@ function normalizeContract(contract: Contract): Contract {
     checkOutFuelLevel: contract.checkOutFuelLevel ?? "",
     checkOutNotes: contract.checkOutNotes ?? "",
     checkOutPhotos: contract.checkOutPhotos ?? "",
+    checkOutSignatureName: contract.checkOutSignatureName ?? "",
+    checkOutSignatureHash: contract.checkOutSignatureHash ?? "",
+    checkOutSignatureDevice: contract.checkOutSignatureDevice ?? "",
     checkInAt: contract.checkInAt ?? null,
     checkInBy: contract.checkInBy ?? "",
     checkInKm: contract.checkInKm ?? 0,
     checkInFuelLevel: contract.checkInFuelLevel ?? "",
     checkInNotes: contract.checkInNotes ?? "",
     checkInPhotos: contract.checkInPhotos ?? "",
+    checkInSignatureName: contract.checkInSignatureName ?? "",
+    checkInSignatureHash: contract.checkInSignatureHash ?? "",
+    checkInSignatureDevice: contract.checkInSignatureDevice ?? "",
+  };
+}
+
+function normalizeInvoice(invoice: Invoice): Invoice {
+  return {
+    ...invoice,
+    sourceType: invoice.sourceType === "MANUAL" ? "MANUAL" : "CONTRATO",
+    invoiceType:
+      invoice.invoiceType === "V" || invoice.invoiceType === "R" || invoice.invoiceType === "A" ? invoice.invoiceType : "F",
+    contractId: invoice.contractId ?? null,
+    sourceInvoiceId: invoice.sourceInvoiceId ?? null,
+    manualCustomerName: invoice.manualCustomerName ?? "",
+    manualCustomerTaxId: invoice.manualCustomerTaxId ?? "",
+    manualCustomerAddress: invoice.manualCustomerAddress ?? "",
+    manualCustomerEmail: invoice.manualCustomerEmail ?? "",
+    manualLanguage: invoice.manualLanguage ?? "",
+    status: invoice.status === "FINAL" ? "FINAL" : "BORRADOR",
+    finalizedAt: invoice.finalizedAt ?? null,
+    finalizedBy: invoice.finalizedBy ?? "",
   };
 }
 

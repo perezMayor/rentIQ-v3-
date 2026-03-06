@@ -1,3 +1,4 @@
+// Página del módulo clientes.
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getSessionUser } from "@/lib/auth";
@@ -8,6 +9,7 @@ import {
   getClientById,
   getClientHistorySummary,
   getNextClientCode,
+  importClientsFromCsv,
   listClientCommissionSummary,
   listClientReservations,
   listClients,
@@ -24,6 +26,7 @@ type Props = {
     type?: string;
     historyClientId?: string;
     error?: string;
+    ok?: string;
   }>;
 };
 
@@ -42,6 +45,9 @@ export default async function ClientesPage({ searchParams }: Props) {
   const user = await getSessionUser();
   if (!user) {
     redirect("/login");
+  }
+  if (user.role === "LECTOR") {
+    redirect("/dashboard");
   }
 
   const params = await searchParams;
@@ -73,6 +79,29 @@ export default async function ClientesPage({ searchParams }: Props) {
       redirect("/clientes?tab=ficha");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Error al crear cliente";
+      redirect(`/clientes?tab=ficha&error=${encodeURIComponent(message)}`);
+    }
+  }
+
+  async function importClientsCsvAction(formData: FormData) {
+    "use server";
+    const actor = await getSessionUser();
+    if (!actor) redirect("/login");
+    if (actor.role === "LECTOR") redirect("/clientes?tab=ficha&error=Permiso+denegado");
+    const csvFile = formData.get("clientsCsvFile");
+    if (!(csvFile instanceof File) || csvFile.size === 0) {
+      redirect("/clientes?tab=ficha&error=Debes+adjuntar+un+CSV");
+    }
+    if (csvFile.size > 4 * 1024 * 1024) {
+      redirect("/clientes?tab=ficha&error=CSV+demasiado+grande+(max+4MB)");
+    }
+    try {
+      const csvRaw = Buffer.from(await csvFile.arrayBuffer()).toString("utf8");
+      const result = await importClientsFromCsv(csvRaw, { id: actor.id, role: actor.role });
+      revalidatePath("/clientes");
+      redirect(`/clientes?tab=ficha&ok=${encodeURIComponent(`Importación OK: filas ${result.rows}, creados ${result.created}, reutilizados ${result.reused}`)}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Error importando clientes";
       redirect(`/clientes?tab=ficha&error=${encodeURIComponent(message)}`);
     }
   }
@@ -140,14 +169,11 @@ export default async function ClientesPage({ searchParams }: Props) {
 
   return (
     <div className="stack-lg">
-      <header className="stack-sm">
-        <h2>Clientes</h2>
-      </header>
-
       {params.error ? <p className="danger-text">{params.error}</p> : null}
+      {params.ok ? <p>{params.ok}</p> : null}
 
       <section className="card stack-sm">
-        <div className="inline-actions-cell">
+        <div className="table-header-row">
           <a className={tab === "ficha" ? "primary-btn text-center" : "secondary-btn text-center"} href="/clientes?tab=ficha">
             Ficha de cliente
           </a>
@@ -164,35 +190,42 @@ export default async function ClientesPage({ searchParams }: Props) {
       </section>
 
       {tab === "ficha" ? (
-        <section className="card stack-md">
-          <h3>Ficha de cliente</h3>
-          {!canWrite ? <p className="danger-text">Modo lectura: no puedes crear clientes.</p> : null}
-          <ClientForm
-            action={createClientAction}
-            deactivateAction={deactivateClientAction}
-            canWrite={canWrite}
-            nextClientCode={nextClientCode}
-            existingClients={allClients.map((client) => ({
-              id: client.id,
-              clientCode: client.clientCode,
-              clientType: client.clientType,
-              firstName: client.firstName,
-              lastName: client.lastName,
-              companyName: client.companyName,
-              documentNumber: client.documentNumber,
-              licenseNumber: client.licenseNumber,
-              taxId: client.taxId,
-              email: client.email,
-              warnings: client.warnings,
-            }))}
-          />
-        </section>
+        <>
+          <section className="card stack-md">
+            <ClientForm
+              action={createClientAction}
+              deactivateAction={deactivateClientAction}
+              canWrite={canWrite}
+              nextClientCode={nextClientCode}
+              existingClients={allClients.map((client) => ({
+                id: client.id,
+                clientCode: client.clientCode,
+                clientType: client.clientType,
+                firstName: client.firstName,
+                lastName: client.lastName,
+                companyName: client.companyName,
+                documentNumber: client.documentNumber,
+                licenseNumber: client.licenseNumber,
+                taxId: client.taxId,
+                email: client.email,
+                warnings: client.warnings,
+              }))}
+            />
+          </section>
+
+          <section className="card stack-sm">
+            <h3>Importación por archivo (CSV estándar)</h3>
+            <form action={importClientsCsvAction} className="inline-search import-compact">
+              <input name="clientsCsvFile" type="file" accept=".csv,text/csv" required disabled={!canWrite} />
+              <button className="secondary-btn" type="submit" disabled={!canWrite}>Importar CSV</button>
+            </form>
+          </section>
+        </>
       ) : null}
 
       {tab === "listado" ? (
         <section className="card stack-sm">
           <div className="table-header-row">
-            <h3>Listado de clientes</h3>
             <form method="GET" className="inline-search">
               <input type="hidden" name="tab" value="listado" />
               <input name="q" defaultValue={q} placeholder="Busca por nombre, mail, doc..." />
@@ -279,7 +312,6 @@ export default async function ClientesPage({ searchParams }: Props) {
       {tab === "historico" ? (
         <section className="card stack-sm">
           <div className="table-header-row">
-            <h3>Histórico de cliente</h3>
             <form method="GET" className="inline-search">
               <input type="hidden" name="tab" value="historico" />
               <input name="historyClientId" defaultValue={historyClientId} placeholder="ID cliente" list="clients-history-list" />
@@ -409,10 +441,8 @@ export default async function ClientesPage({ searchParams }: Props) {
 
       {tab === "comisiones" ? (
         <section className="card stack-sm">
-          <h3>Comisiones</h3>
-          <p className="muted-text">Porcentaje fijo por cliente o comisionista y cálculo operativo sobre reservas/contratos.</p>
           <details>
-            <summary>Configurar % fijo por cliente/comisionista</summary>
+            <summary>Configurar</summary>
             <div className="table-wrap" style={{ marginTop: "0.6rem" }}>
               <table className="data-table">
                 <thead>
@@ -421,13 +451,12 @@ export default async function ClientesPage({ searchParams }: Props) {
                     <th>Tipo</th>
                     <th>Nombre</th>
                     <th>% fijo</th>
-                    <th>Guardar</th>
                   </tr>
                 </thead>
                 <tbody>
                   {allClients.length === 0 ? (
                     <tr>
-                      <td colSpan={5} className="muted-text">Sin clientes.</td>
+                      <td colSpan={4} className="muted-text">Sin clientes.</td>
                     </tr>
                   ) : (
                     allClients.map((client) => (
@@ -443,7 +472,6 @@ export default async function ClientesPage({ searchParams }: Props) {
                             <button className="secondary-btn" type="submit" disabled={!canWrite}>Guardar</button>
                           </form>
                         </td>
-                        <td>{canWrite ? "Editable" : "Solo lectura"}</td>
                       </tr>
                     ))
                   )}
