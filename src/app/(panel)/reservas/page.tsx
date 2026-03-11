@@ -1,32 +1,41 @@
 // Página del módulo reservas.
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { getSessionUser } from "@/lib/auth";
+import { getSelectedBranchId, getSessionUser } from "@/lib/auth";
+import { formatDateTimeDisplay, formatMoneyDisplay } from "@/lib/formatting";
 import {
   addSalesChannel,
   assignPlateToReservation,
   convertReservationToContract,
   createVehicleBlock,
   createReservation,
+  getCompanySettings,
   getReservationForecast,
   getSalesChannelStats,
   listClients,
+  listContracts,
   listPlanning,
   listReservationAudit,
   listReservationConfirmationLogs,
   listReservations,
   listSalesChannels,
+  listTemplates,
+  listTariffCatalog,
   listTariffPlans,
   listVehicleExtras,
   listFleetVehicles,
+  listVehicleCategories,
   sendReservationConfirmation,
+  updateReservation,
 } from "@/lib/services/rental-service";
 import { ReservationForm } from "@/app/(panel)/reservas/reservation-form";
+import { ReservationBudgetTab } from "@/app/(panel)/reservas/reservation-budget-tab";
+import { sendBudgetUsingTemplate } from "@/lib/services/budget-mail-service";
 import { ModuleHelp } from "@/components/module-help";
 import { withActionLock } from "@/lib/action-lock";
 import { getActionErrorMessage } from "@/lib/action-errors";
 
-type ReservasTab = "gestion" | "entregas" | "recogidas" | "localizar" | "canales" | "logs" | "planning" | "informes";
+type ReservasTab = "gestion" | "entregas" | "recogidas" | "localizar" | "canales" | "logs" | "planning" | "informes" | "presupuestos";
 type PlanningSubTab = "principal" | "asignacion" | "bloqueos" | "resumen" | "detalle";
 
 type Props = {
@@ -53,8 +62,6 @@ type Props = {
     locNumber?: string;
     locPlate?: string;
     locCustomer?: string;
-    locFrom?: string;
-    locTo?: string;
     locStatus?: string;
     locBranch?: string;
     statsFrom?: string;
@@ -66,6 +73,7 @@ type Props = {
     planningPlate?: string;
     planningGroup?: string;
     planningModel?: string;
+    planningBranch?: string;
     planningSubtab?: string;
     planningSelected?: string;
     reportDateField?: string;
@@ -84,7 +92,7 @@ type Props = {
 };
 
 function normalizeTab(value: string): ReservasTab {
-  if (value === "entregas" || value === "recogidas" || value === "localizar" || value === "canales" || value === "logs" || value === "planning" || value === "informes") {
+  if (value === "entregas" || value === "recogidas" || value === "localizar" || value === "canales" || value === "logs" || value === "planning" || value === "informes" || value === "presupuestos") {
     return value;
   }
   return "gestion";
@@ -92,9 +100,9 @@ function normalizeTab(value: string): ReservasTab {
 
 function allowedTabsByRole(role: string): ReservasTab[] {
   if (role === "LECTOR") {
-    return ["gestion", "entregas", "recogidas", "localizar"];
+    return ["gestion", "entregas", "recogidas", "localizar", "presupuestos"];
   }
-  return ["gestion", "entregas", "recogidas", "localizar", "canales", "logs", "planning", "informes"];
+  return ["gestion", "entregas", "recogidas", "localizar", "canales", "logs", "planning", "informes", "presupuestos"];
 }
 
 function normalizePlanningSubtab(value: string): PlanningSubTab {
@@ -130,9 +138,49 @@ function defaultDateRange(days = 30) {
   return { from: from.toISOString().slice(0, 10), to: now.toISOString().slice(0, 10) };
 }
 
+function normalizeBranchToken(value: string) {
+  return value.trim().toUpperCase().replace(/\s+/g, " ");
+}
+
+function normalizeSearchToken(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function matchesSimilarity(haystack: string, needle: string) {
+  const target = normalizeSearchToken(haystack);
+  const query = normalizeSearchToken(needle);
+  if (!query) return true;
+  if (!target) return false;
+  const tokens = query.split(" ").filter(Boolean);
+  return tokens.every((token) => target.includes(token));
+}
+
+function reservationMatchesBranch(
+  value: string,
+  branchFilter: string,
+  branches: Array<{ code: string; name: string }>,
+) {
+  const filter = normalizeBranchToken(branchFilter);
+  if (!filter) return true;
+  const current = normalizeBranchToken(value);
+  if (!current) return false;
+  if (current.includes(filter)) return true;
+  const branch = branches.find(
+    (item) => normalizeBranchToken(item.code) === current || normalizeBranchToken(item.name) === current,
+  );
+  if (!branch) return false;
+  return normalizeBranchToken(branch.code) === filter || normalizeBranchToken(branch.name) === filter;
+}
+
 export default async function ReservasPage({ searchParams }: Props) {
   const user = await getSessionUser();
   if (!user) redirect("/login");
+  const selectedBranchId = await getSelectedBranchId();
 
   const params = await searchParams;
   const requestedTab = normalizeTab((params.tab ?? "gestion").toLowerCase());
@@ -149,14 +197,14 @@ export default async function ReservasPage({ searchParams }: Props) {
 
   const deliveryFrom = params.deliveryFrom ?? range15.from;
   const deliveryTo = params.deliveryTo ?? range15.to;
-  const deliveryBranch = params.deliveryBranch ?? "";
+  const deliveryBranch = params.deliveryBranch ?? selectedBranchId;
   const deliveryStatus = (params.deliveryStatus ?? "TODOS").toUpperCase();
   const deliveryType = (params.deliveryType ?? "TODOS").toUpperCase();
   const deliveryOrderBy = (params.deliveryOrderBy ?? "FECHA").toUpperCase();
   const deliveryOrder = (params.deliveryOrder ?? "ASC").toUpperCase();
   const pickupFrom = params.pickupFrom ?? range15.from;
   const pickupTo = params.pickupTo ?? range15.to;
-  const pickupBranch = params.pickupBranch ?? "";
+  const pickupBranch = params.pickupBranch ?? selectedBranchId;
   const pickupStatus = (params.pickupStatus ?? "TODOS").toUpperCase();
   const pickupType = (params.pickupType ?? "TODOS").toUpperCase();
   const pickupOrderBy = (params.pickupOrderBy ?? "FECHA").toUpperCase();
@@ -165,8 +213,6 @@ export default async function ReservasPage({ searchParams }: Props) {
   const locNumber = params.locNumber ?? "";
   const locPlate = params.locPlate ?? "";
   const locCustomer = params.locCustomer ?? "";
-  const locFrom = params.locFrom ?? range30.from;
-  const locTo = params.locTo ?? range30.to;
   const locStatus = (params.locStatus ?? "TODOS").toUpperCase();
   const locBranch = params.locBranch ?? "";
 
@@ -181,9 +227,10 @@ export default async function ReservasPage({ searchParams }: Props) {
   const planningPlate = params.planningPlate ?? "";
   const planningGroup = params.planningGroup ?? "";
   const planningModel = params.planningModel ?? "";
+  const planningBranch = params.planningBranch ?? "";
   const planningSubtab = normalizePlanningSubtab((params.planningSubtab ?? "principal").toLowerCase());
   const planningSelected = params.planningSelected ?? "";
-  const planningDirectUrl = `/planning-completo?start=${encodeURIComponent(planningStart)}&period=${planningPeriod}&plate=${encodeURIComponent(planningPlate)}&group=${encodeURIComponent(planningGroup)}&model=${encodeURIComponent(planningModel)}`;
+  const planningDirectUrl = `/planning-completo?start=${encodeURIComponent(planningStart)}&period=${planningPeriod}&plate=${encodeURIComponent(planningPlate)}&group=${encodeURIComponent(planningGroup)}&model=${encodeURIComponent(planningModel)}&branch=${encodeURIComponent(planningBranch ?? "")}`;
 
   if (tab === "planning") {
     redirect(planningDirectUrl);
@@ -194,15 +241,15 @@ export default async function ReservasPage({ searchParams }: Props) {
   const reportTo = params.reportTo ?? range30.to;
   const reportChannel = params.reportChannel ?? "";
   const reportStatus = (params.reportStatus ?? "TODOS").toUpperCase();
-  const reportDeliveryBranch = params.reportDeliveryBranch ?? "";
-  const reportPickupBranch = params.reportPickupBranch ?? "";
+  const reportDeliveryBranch = params.reportDeliveryBranch ?? selectedBranchId;
+  const reportPickupBranch = params.reportPickupBranch ?? selectedBranchId;
   const reportGroup = params.reportGroup ?? "";
   const reportCommissioner = params.reportCommissioner ?? "";
   const reportCompany = params.reportCompany ?? "";
   const reportOrderBy = (params.reportOrderBy ?? "FECHA").toUpperCase();
   const reportOrder = (params.reportOrder ?? "ASC").toUpperCase();
 
-  const [allReservations, tariffPlans, clients, fleet, vehicleExtras, salesChannels, salesChannelStats, forecast, confirmationLogs, planning] =
+  const [allReservations, tariffPlans, clients, fleet, vehicleExtras, salesChannels, salesChannelStats, forecast, confirmationLogs, planning, settings, contracts, categories, templates] =
     await Promise.all([
       listReservations(""),
       listTariffPlans(""),
@@ -219,8 +266,44 @@ export default async function ReservasPage({ searchParams }: Props) {
         plateFilter: planningPlate,
         groupFilter: planningGroup,
         modelFilter: planningModel,
+        branchFilter: planningBranch,
       }),
+      getCompanySettings(),
+      listContracts(""),
+      listVehicleCategories(),
+      listTemplates(""),
     ]);
+  const activeBudgetTemplate =
+    templates.find((item) => item.templateType === "PRESUPUESTO" && item.language === "es" && item.active) ??
+    templates.find((item) => item.templateType === "PRESUPUESTO" && item.active) ??
+    null;
+  const tariffCatalogs = await Promise.all(
+    tariffPlans.map(async (plan) => {
+      const catalog = await listTariffCatalog(plan.id);
+      return {
+        plan: {
+          id: plan.id,
+          code: plan.code,
+          validFrom: plan.validFrom,
+          validTo: plan.validTo,
+          updatedAt: plan.updatedAt,
+          courtesyHours: plan.courtesyHours,
+        },
+        brackets: catalog.brackets.map((item) => ({
+          id: item.id,
+          fromDay: item.fromDay,
+          toDay: item.toDay,
+          order: item.order,
+          label: item.label,
+        })),
+        prices: catalog.prices.map((item) => ({
+          bracketId: item.bracketId,
+          groupCode: item.groupCode,
+          price: item.price,
+        })),
+      };
+    }),
+  );
 
   const prefillClient = prefillClientId ? clients.find((client) => client.id === prefillClientId) ?? null : null;
   const auditItems = auditReservationId ? await listReservationAudit(auditReservationId) : [];
@@ -228,7 +311,7 @@ export default async function ReservasPage({ searchParams }: Props) {
 
   const deliveries = allReservations
     .filter((reservation) => inRange(reservation.deliveryAt, `${deliveryFrom}T00:00:00`, `${deliveryTo}T23:59:59`))
-    .filter((reservation) => !deliveryBranch || reservation.branchDelivery.toLowerCase().includes(deliveryBranch.toLowerCase()))
+    .filter((reservation) => reservationMatchesBranch(reservation.branchDelivery, deliveryBranch, settings.branches))
     .filter((reservation) => {
       const state = reservationStateLabel({ contractId: reservation.contractId, reservationStatus: reservation.reservationStatus });
       return deliveryStatus === "TODOS" || state === deliveryStatus;
@@ -247,7 +330,7 @@ export default async function ReservasPage({ searchParams }: Props) {
     });
   const pickups = allReservations
     .filter((reservation) => inRange(reservation.pickupAt, `${pickupFrom}T00:00:00`, `${pickupTo}T23:59:59`))
-    .filter((reservation) => !pickupBranch || reservation.pickupBranch.toLowerCase().includes(pickupBranch.toLowerCase()))
+    .filter((reservation) => reservationMatchesBranch(reservation.pickupBranch, pickupBranch, settings.branches))
     .filter((reservation) => {
       const state = reservationStateLabel({ contractId: reservation.contractId, reservationStatus: reservation.reservationStatus });
       return pickupStatus === "TODOS" || state === pickupStatus;
@@ -268,9 +351,14 @@ export default async function ReservasPage({ searchParams }: Props) {
   const locatedReservations = allReservations
     .filter((reservation) => !locNumber || reservation.reservationNumber.toLowerCase().includes(locNumber.toLowerCase()))
     .filter((reservation) => !locPlate || reservation.assignedPlate.toLowerCase().includes(locPlate.toLowerCase()))
-    .filter((reservation) => !locCustomer || reservation.customerName.toLowerCase().includes(locCustomer.toLowerCase()))
-    .filter((reservation) => !locBranch || reservation.branchDelivery.toLowerCase().includes(locBranch.toLowerCase()))
-    .filter((reservation) => inRange(reservation.deliveryAt, `${locFrom}T00:00:00`, `${locTo}T23:59:59`))
+    .filter((reservation) =>
+      !locCustomer ||
+      matchesSimilarity(
+        [reservation.customerName, reservation.customerCompany, reservation.customerCommissioner].filter(Boolean).join(" "),
+        locCustomer,
+      ),
+    )
+    .filter((reservation) => reservationMatchesBranch(reservation.branchDelivery, locBranch, settings.branches))
     .filter((reservation) => {
       const state = reservationStateLabel({ contractId: reservation.contractId, reservationStatus: reservation.reservationStatus });
       return locStatus === "TODOS" || state === locStatus;
@@ -296,8 +384,8 @@ export default async function ReservasPage({ searchParams }: Props) {
       return inRange(dateValue, `${reportFrom}T00:00:00`, `${reportTo}T23:59:59`);
     })
     .filter((reservation) => !reportChannel || reservation.salesChannel.toLowerCase().includes(reportChannel.toLowerCase()))
-    .filter((reservation) => !reportDeliveryBranch || reservation.branchDelivery.toLowerCase().includes(reportDeliveryBranch.toLowerCase()))
-    .filter((reservation) => !reportPickupBranch || reservation.pickupBranch.toLowerCase().includes(reportPickupBranch.toLowerCase()))
+    .filter((reservation) => reservationMatchesBranch(reservation.branchDelivery, reportDeliveryBranch, settings.branches))
+    .filter((reservation) => reservationMatchesBranch(reservation.pickupBranch, reportPickupBranch, settings.branches))
     .filter((reservation) => !reportGroup || reservation.billedCarGroup.toLowerCase().includes(reportGroup.toLowerCase()))
     .filter((reservation) => !reportCommissioner || reservation.customerCommissioner.toLowerCase().includes(reportCommissioner.toLowerCase()))
     .filter((reservation) => !reportCompany || reservation.customerCompany.toLowerCase().includes(reportCompany.toLowerCase()))
@@ -333,7 +421,7 @@ export default async function ReservasPage({ searchParams }: Props) {
   const unassignedReservations = allReservations.filter((item) => !item.assignedPlate);
   const planningItems = planning.flatMap((group) => group.models.flatMap((model) => model.rows.flatMap((row) => row.items)));
   const selectedPlanningItem = planningItems.find((item) => item.id === planningSelected) ?? null;
-  const planningQueryBase = `planningStart=${encodeURIComponent(planningStart)}&planningPeriod=${planningPeriod}&planningPlate=${encodeURIComponent(planningPlate)}&planningGroup=${encodeURIComponent(planningGroup)}&planningModel=${encodeURIComponent(planningModel)}`;
+  const planningQueryBase = `planningStart=${encodeURIComponent(planningStart)}&planningPeriod=${planningPeriod}&planningPlate=${encodeURIComponent(planningPlate)}&planningGroup=${encodeURIComponent(planningGroup)}&planningModel=${encodeURIComponent(planningModel)}&planningBranch=${encodeURIComponent(planningBranch ?? "")}`;
   const helpByTab: Record<ReservasTab, string[]> = {
     gestion: ["Busca o crea cliente.", "Completa tramo y condiciones.", "Guarda la reserva."],
     entregas: ["Filtra por fecha/sucursal.", "Abre la reserva.", "Valida estado y matrícula."],
@@ -343,6 +431,7 @@ export default async function ReservasPage({ searchParams }: Props) {
     logs: ["Filtra periodo.", "Revisa estado del envío.", "Reenvía si es necesario."],
     planning: ["Ajusta rango.", "Detecta solapes.", "Abre elemento para corregir."],
     informes: ["Define filtros.", "Valida resultados.", "Exporta reporte."],
+    presupuestos: ["Selecciona tarifa y grupo.", "Añade seguros y extras.", "Calcula sin crear reserva."],
   };
 
   async function createReservationAction(formData: FormData) {
@@ -367,6 +456,29 @@ export default async function ReservasPage({ searchParams }: Props) {
     } catch (error) {
       const message = getActionErrorMessage(error, "Error al crear reserva");
       redirect(`/reservas?tab=gestion&error=${encodeURIComponent(message)}`);
+    }
+  }
+
+  async function updateReservationAction(formData: FormData) {
+    "use server";
+    const actor = await getSessionUser();
+    if (!actor) redirect("/login");
+    if (actor.role === "LECTOR") redirect("/reservas?tab=gestion&error=Permiso+denegado");
+    const reservationId = String(formData.get("reservationId") ?? "").trim();
+    if (!reservationId) {
+      redirect("/reservas?tab=gestion&error=Reserva+no+indicada");
+    }
+    const input = Object.fromEntries(formData.entries()) as Record<string, string>;
+    try {
+      await withActionLock(`reservation:update:${actor.id}:${reservationId}`, async () => {
+        await updateReservation(reservationId, input, { id: actor.id, role: actor.role });
+      });
+      revalidatePath("/reservas");
+      revalidatePath("/planning");
+      redirect(`/reservas?tab=gestion&reservationId=${encodeURIComponent(reservationId)}&ok=${encodeURIComponent("Reserva actualizada")}`);
+    } catch (error) {
+      const message = getActionErrorMessage(error, "Error al actualizar reserva");
+      redirect(`/reservas?tab=gestion&reservationId=${encodeURIComponent(reservationId)}&error=${encodeURIComponent(message)}`);
     }
   }
 
@@ -403,7 +515,46 @@ export default async function ReservasPage({ searchParams }: Props) {
     }
   }
 
+  async function confirmAndGenerateContractAction(formData: FormData) {
+    "use server";
+    const actor = await getSessionUser();
+    if (!actor) redirect("/login");
+    if (actor.role === "LECTOR") redirect("/reservas?tab=gestion&error=Permiso+denegado");
+    const targetReservationId = String(formData.get("reservationId") ?? "").trim();
+    if (!targetReservationId) {
+      redirect("/reservas?tab=gestion&error=Reserva+no+indicada");
+    }
+    const reservations = await listReservations("");
+    const reservation = reservations.find((item) => item.id === targetReservationId);
+    if (!reservation) {
+      redirect("/reservas?tab=gestion&error=Reserva+no+encontrada");
+    }
+    try {
+      if (reservation.reservationStatus === "PETICION") {
+        await withActionLock(`reservation:confirm:${actor.id}:${reservation.id}`, async () => {
+          await updateReservation(reservation.id, { reservationStatus: "CONFIRMADA" }, { id: actor.id, role: actor.role });
+        });
+      }
+      await withActionLock(`reservation:confirm-to-contract:${actor.id}:${reservation.id}`, async () => {
+        await convertReservationToContract(reservation.id, { id: actor.id, role: actor.role }, { overrideAccepted: "false", overrideReason: "" });
+      });
+      revalidatePath("/reservas");
+      revalidatePath("/contratos");
+      redirect("/contratos?tab=gestion");
+    } catch (error) {
+      const message = getActionErrorMessage(error, "Error al confirmar y generar contrato");
+      redirect(`/reservas?tab=gestion&reservationId=${encodeURIComponent(targetReservationId)}&error=${encodeURIComponent(message)}`);
+    }
+  }
+
   const selectedGestionReservation = reservationId ? allReservations.find((item) => item.id === reservationId) ?? null : null;
+  const selectedGestionClient = selectedGestionReservation?.customerId
+    ? clients.find((item) => item.id === selectedGestionReservation.customerId) ?? null
+    : null;
+  const selectedPlanningReservation =
+    selectedPlanningItem?.type === "RESERVA"
+      ? allReservations.find((item) => item.id === selectedPlanningItem.referenceId) ?? null
+      : null;
 
   async function sendConfirmationAction(formData: FormData) {
     "use server";
@@ -421,7 +572,7 @@ export default async function ReservasPage({ searchParams }: Props) {
       }
       redirect("/reservas?tab=gestion");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error al enviar confirmacion";
+      const message = getActionErrorMessage(error, "Error al enviar confirmacion");
       redirect(`/reservas?tab=${encodeURIComponent(tabContext)}&error=${encodeURIComponent(message)}`);
     }
   }
@@ -437,7 +588,7 @@ export default async function ReservasPage({ searchParams }: Props) {
       revalidatePath("/reservas");
       redirect(`/reservas?tab=canales&statsFrom=${statsFrom}&statsTo=${statsTo}`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error al crear canal";
+      const message = getActionErrorMessage(error, "Error al crear canal");
       redirect(`/reservas?tab=canales&error=${encodeURIComponent(message)}`);
     }
   }
@@ -455,7 +606,7 @@ export default async function ReservasPage({ searchParams }: Props) {
       revalidatePath("/planning");
       redirect(`/reservas?tab=planning&planningSubtab=principal&${planningQueryBase}`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error asignando matrícula";
+      const message = getActionErrorMessage(error, "Error asignando matrícula");
       redirect(`/reservas?tab=planning&planningSubtab=asignacion&${planningQueryBase}&error=${encodeURIComponent(message)}`);
     }
   }
@@ -472,9 +623,38 @@ export default async function ReservasPage({ searchParams }: Props) {
       revalidatePath("/planning");
       redirect(`/reservas?tab=planning&planningSubtab=principal&${planningQueryBase}`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error creando bloqueo";
+      const message = getActionErrorMessage(error, "Error creando bloqueo");
       redirect(`/reservas?tab=planning&planningSubtab=bloqueos&${planningQueryBase}&error=${encodeURIComponent(message)}`);
     }
+  }
+
+  async function sendBudgetEmailAction(input: {
+    toEmail: string;
+    language: string;
+    deliveryAt: string;
+    deliveryPlace: string;
+    pickupAt: string;
+    pickupPlace: string;
+    billedCarGroup: string;
+    billedDays: number;
+    appliedRate: string;
+    baseAmount: number;
+    discountAmount: number;
+    insuranceAmount: number;
+    extrasAmount: number;
+    fuelAmount: number;
+    totalAmount: number;
+    extrasBreakdown: string;
+  }) {
+    "use server";
+    const actor = await getSessionUser();
+    if (!actor) {
+      throw new Error("Sesion no valida");
+    }
+    if (actor.role === "LECTOR") {
+      throw new Error("Permiso denegado");
+    }
+    await sendBudgetUsingTemplate(input, { id: actor.id, role: actor.role });
   }
 
   return (
@@ -491,6 +671,7 @@ export default async function ReservasPage({ searchParams }: Props) {
           {allowedTabs.includes("logs") ? <a className={tab === "logs" ? "primary-btn text-center" : "secondary-btn text-center"} href="/reservas?tab=logs">Log confirmaciones</a> : null}
           {allowedTabs.includes("planning") ? <a className="secondary-btn text-center" href={planningDirectUrl}>Planning</a> : null}
           {allowedTabs.includes("informes") ? <a className={tab === "informes" ? "primary-btn text-center" : "secondary-btn text-center"} href="/reservas?tab=informes">Informes de reserva</a> : null}
+          {allowedTabs.includes("presupuestos") ? <a className={tab === "presupuestos" ? "primary-btn text-center" : "secondary-btn text-center"} href="/reservas?tab=presupuestos">Presupuestos</a> : null}
         </div>
       </section>
       <ModuleHelp title="Ayuda rápida de Reservas" steps={helpByTab[tab]} />
@@ -507,10 +688,26 @@ export default async function ReservasPage({ searchParams }: Props) {
             </div>
             {canWrite ? (
               <ReservationForm
-                action={createReservationAction}
+                key={selectedGestionReservation?.id ?? "reservation-create-new"}
+                action={selectedGestionReservation ? updateReservationAction : createReservationAction}
                 canWrite={canWrite}
                 initialClient={
-                  prefillClient
+                  selectedGestionClient
+                    ? {
+                        id: selectedGestionClient.id,
+                        clientCode: selectedGestionClient.clientCode,
+                        clientType: selectedGestionClient.clientType,
+                        firstName: selectedGestionClient.firstName,
+                        lastName: selectedGestionClient.lastName,
+                        companyName: selectedGestionClient.companyName,
+                        commissionerName: selectedGestionClient.commissionerName,
+                        documentNumber: selectedGestionClient.documentNumber,
+                        licenseNumber: selectedGestionClient.licenseNumber,
+                        email: selectedGestionClient.email,
+                        phone1: selectedGestionClient.phone1,
+                        acquisitionChannel: selectedGestionClient.acquisitionChannel,
+                      }
+                    : prefillClient
                     ? {
                         id: prefillClient.id,
                         clientCode: prefillClient.clientCode,
@@ -527,7 +724,46 @@ export default async function ReservasPage({ searchParams }: Props) {
                       }
                     : null
                 }
+                initialValues={
+                  selectedGestionReservation
+                    ? {
+                        reservationId: selectedGestionReservation.id,
+                        customerId: selectedGestionReservation.customerId ?? "",
+                        customerName: selectedGestionReservation.customerName ?? "",
+                        customerCompany: selectedGestionReservation.customerCompany ?? "",
+                        customerCommissioner: selectedGestionReservation.customerCommissioner ?? "",
+                        salesChannel: selectedGestionReservation.salesChannel ?? "",
+                        branchDelivery: selectedGestionReservation.branchDelivery ?? "",
+                        deliveryPlace: selectedGestionReservation.deliveryPlace ?? "",
+                        deliveryAt: selectedGestionReservation.deliveryAt ?? "",
+                        deliveryFlightNumber: selectedGestionReservation.deliveryFlightNumber ?? "",
+                        pickupBranch: selectedGestionReservation.pickupBranch ?? "",
+                        pickupPlace: selectedGestionReservation.pickupPlace ?? "",
+                        pickupAt: selectedGestionReservation.pickupAt ?? "",
+                        pickupFlightNumber: selectedGestionReservation.pickupFlightNumber ?? "",
+                        reservationStatus: selectedGestionReservation.reservationStatus ?? "CONFIRMADA",
+                        billedCarGroup: selectedGestionReservation.billedCarGroup ?? "",
+                        assignedVehicleGroup: selectedGestionReservation.assignedVehicleGroup ?? "",
+                        assignedPlate: selectedGestionReservation.assignedPlate ?? "",
+                        appliedRate: selectedGestionReservation.appliedRate ?? "",
+                        deductible: selectedGestionReservation.deductible ?? "",
+                        depositAmount: String(selectedGestionReservation.depositAmount ?? 0),
+                        paymentsMade: String(selectedGestionReservation.paymentsMade ?? 0),
+                        baseAmount: String(selectedGestionReservation.baseAmount ?? 0),
+                        discountAmount: String(selectedGestionReservation.discountAmount ?? 0),
+                        discountBreakdown: selectedGestionReservation.discountBreakdown ?? "",
+                        fuelAmount: String(selectedGestionReservation.fuelAmount ?? 0),
+                        penaltiesAmount: String(selectedGestionReservation.penaltiesAmount ?? 0),
+                        publicNotes: selectedGestionReservation.publicNotes ?? "",
+                        privateNotes: selectedGestionReservation.privateNotes ?? "",
+                        additionalDrivers: selectedGestionReservation.additionalDrivers ?? "",
+                        extrasBreakdown: selectedGestionReservation.extrasBreakdown ?? "",
+                        blockPlateForReservation: selectedGestionReservation.blockPlateForReservation ?? false,
+                      }
+                    : undefined
+                }
                 tariffOptions={tariffPlans.map((plan) => ({ id: plan.id, code: plan.code, title: plan.title }))}
+                tariffCatalogs={tariffCatalogs}
                 clients={clients.map((client) => ({
                   id: client.id,
                   clientCode: client.clientCode,
@@ -545,9 +781,28 @@ export default async function ReservasPage({ searchParams }: Props) {
                 vehicles={fleet.map((vehicle) => ({
                   plate: vehicle.plate,
                   groupLabel: vehicle.categoryLabel.split(" - ")[0] || vehicle.categoryLabel,
+                  activeUntil: vehicle.activeUntil || "",
                 }))}
+                reservations={allReservations.map((reservation) => ({
+                  assignedPlate: reservation.assignedPlate,
+                  deliveryAt: reservation.deliveryAt,
+                  pickupAt: reservation.pickupAt,
+                }))}
+                contracts={contracts.map((contract) => ({
+                  vehiclePlate: contract.vehiclePlate,
+                  deliveryAt: contract.deliveryAt,
+                  pickupAt: contract.pickupAt,
+                }))}
+                branches={settings.branches.map((branch) => ({
+                  code: branch.code,
+                  name: branch.name,
+                }))}
+                defaultBranchCode={settings.branches.some((branch) => branch.code === selectedBranchId) ? selectedBranchId : (settings.branches[0]?.code ?? "")}
+                courtesyHours={settings.courtesyHours ?? 0}
+                allGroups={categories.map((category) => category.code || category.name).filter(Boolean)}
                 salesChannels={salesChannels}
-                extraOptions={vehicleExtras.filter((item) => item.active)}
+                insuranceOptions={vehicleExtras.filter((item) => item.active && item.kind === "SEGURO")}
+                extraOptions={vehicleExtras.filter((item) => item.active && item.kind === "EXTRA")}
               />
             ) : null}
           </section>
@@ -573,6 +828,11 @@ export default async function ReservasPage({ searchParams }: Props) {
                   <input type="hidden" name="reservationId" value={selectedGestionReservation.id} />
                   <button className="primary-btn" type="submit" disabled={!canWrite}>Generar contrato</button>
                 </form>
+              ) : selectedGestionReservation.reservationStatus === "PETICION" ? (
+                <form action={confirmAndGenerateContractAction} className="mini-form">
+                  <input type="hidden" name="reservationId" value={selectedGestionReservation.id} />
+                  <button className="primary-btn" type="submit" disabled={!canWrite}>Confirmar y generar contrato</button>
+                </form>
               ) : (
                 <p className="muted-text">Solo se puede generar contrato desde reservas confirmadas.</p>
               )}
@@ -595,7 +855,7 @@ export default async function ReservasPage({ searchParams }: Props) {
                     ) : (
                       auditItems.map((event, index) => (
                         <tr key={`${event.timestamp}-${index}`}>
-                          <td>{event.timestamp}</td>
+                          <td>{formatDateTimeDisplay(event.timestamp)}</td>
                           <td>{event.action}</td>
                           <td>{event.actorId}</td>
                           <td>{event.actorRole}</td>
@@ -619,7 +879,14 @@ export default async function ReservasPage({ searchParams }: Props) {
               <input type="hidden" name="tab" value="entregas" />
               <input name="deliveryFrom" type="date" defaultValue={deliveryFrom} />
               <input name="deliveryTo" type="date" defaultValue={deliveryTo} />
-              <input name="deliveryBranch" defaultValue={deliveryBranch} placeholder="Sucursal entrega" />
+              <select name="deliveryBranch" defaultValue={deliveryBranch}>
+                <option value="">Sucursal entrega</option>
+                {settings.branches.map((branch) => (
+                  <option key={`delivery-filter-${branch.code}`} value={branch.code}>
+                    {branch.code} · {branch.name}
+                  </option>
+                ))}
+              </select>
               <select name="deliveryStatus" defaultValue={deliveryStatus}>
                 <option value="TODOS">Estado: Todos</option>
                 <option value="PETICION">Petición</option>
@@ -642,7 +909,8 @@ export default async function ReservasPage({ searchParams }: Props) {
               <button className="secondary-btn" type="submit">Aplicar</button>
               <a
                 className="secondary-btn text-center"
-                href={`/api/reporting/entregas/export?from=${encodeURIComponent(deliveryFrom)}&to=${encodeURIComponent(deliveryTo)}&branch=${encodeURIComponent(deliveryBranch)}`}
+                href={`/api/reporting/entregas/export?from=${encodeURIComponent(deliveryFrom)}&to=${encodeURIComponent(deliveryTo)}&branch=${encodeURIComponent(deliveryBranch)}&status=${encodeURIComponent(deliveryStatus)}`}
+                download
               >
                 Exportar PDF
               </a>
@@ -670,13 +938,13 @@ export default async function ReservasPage({ searchParams }: Props) {
                   deliveries.map((reservation) => (
                     <tr key={reservation.id}>
                       <td>{reservation.reservationNumber}</td>
-                      <td>{reservation.createdAt}</td>
-                      <td>{reservation.deliveryAt}</td>
+                      <td>{formatDateTimeDisplay(reservation.createdAt)}</td>
+                      <td>{formatDateTimeDisplay(reservation.deliveryAt)}</td>
                       <td>{reservation.branchDelivery}</td>
                       <td>{reservation.customerName}</td>
                       <td>{reservation.assignedPlate || "N/D"}</td>
                       <td>{reservationStateLabel({ contractId: reservation.contractId, reservationStatus: reservation.reservationStatus })}</td>
-                      <td>{reservation.totalPrice.toFixed(2)}</td>
+                      <td>{formatMoneyDisplay(reservation.totalPrice)}</td>
                       <td className="inline-actions-cell">
                         <a className="secondary-btn text-center" href={`/reservas?tab=gestion&reservationId=${reservation.id}`}>
                           Abrir reserva
@@ -701,12 +969,17 @@ export default async function ReservasPage({ searchParams }: Props) {
           <div className="table-header-row">
             <form method="GET" className="inline-search">
               <input type="hidden" name="tab" value="localizar" />
+              <input name="locCustomer" defaultValue={locCustomer} placeholder="Nombre o apellidos" />
               <input name="locNumber" defaultValue={locNumber} placeholder="Nº reserva" />
               <input name="locPlate" defaultValue={locPlate} placeholder="Matrícula" />
-              <input name="locCustomer" defaultValue={locCustomer} placeholder="Cliente" />
-              <input name="locBranch" defaultValue={locBranch} placeholder="Sucursal" />
-              <input name="locFrom" type="date" defaultValue={locFrom} />
-              <input name="locTo" type="date" defaultValue={locTo} />
+              <select name="locBranch" defaultValue={locBranch}>
+                <option value="">Sucursal</option>
+                {settings.branches.map((branch) => (
+                  <option key={`loc-filter-${branch.code}`} value={branch.code}>
+                    {branch.code} · {branch.name}
+                  </option>
+                ))}
+              </select>
               <select name="locStatus" defaultValue={locStatus}>
                 <option value="TODOS">Todos</option>
                 <option value="PETICION">Petición</option>
@@ -727,11 +1000,11 @@ export default async function ReservasPage({ searchParams }: Props) {
                     <tr key={reservation.id}>
                       <td>{reservation.reservationNumber}</td>
                       <td>{reservation.customerName}</td>
-                      <td>{reservation.deliveryAt}</td>
-                      <td>{reservation.pickupAt}</td>
+                      <td>{formatDateTimeDisplay(reservation.deliveryAt)}</td>
+                      <td>{formatDateTimeDisplay(reservation.pickupAt)}</td>
                       <td>{reservation.assignedPlate || "N/D"}</td>
                       <td>{reservationStateLabel({ contractId: reservation.contractId, reservationStatus: reservation.reservationStatus })}</td>
-                      <td>{reservation.totalPrice.toFixed(2)}</td>
+                      <td>{formatMoneyDisplay(reservation.totalPrice)}</td>
                       <td className="inline-actions-cell">
                         <a className="secondary-btn text-center" href={`/reservas?tab=gestion&reservationId=${reservation.id}`}>
                           Abrir en gestión
@@ -758,7 +1031,14 @@ export default async function ReservasPage({ searchParams }: Props) {
               <input type="hidden" name="tab" value="recogidas" />
               <input name="pickupFrom" type="date" defaultValue={pickupFrom} />
               <input name="pickupTo" type="date" defaultValue={pickupTo} />
-              <input name="pickupBranch" defaultValue={pickupBranch} placeholder="Sucursal recogida" />
+              <select name="pickupBranch" defaultValue={pickupBranch}>
+                <option value="">Sucursal recogida</option>
+                {settings.branches.map((branch) => (
+                  <option key={`pickup-filter-${branch.code}`} value={branch.code}>
+                    {branch.code} · {branch.name}
+                  </option>
+                ))}
+              </select>
               <select name="pickupStatus" defaultValue={pickupStatus}>
                 <option value="TODOS">Estado: Todos</option>
                 <option value="PETICION">Petición</option>
@@ -781,7 +1061,8 @@ export default async function ReservasPage({ searchParams }: Props) {
               <button className="secondary-btn" type="submit">Aplicar</button>
               <a
                 className="secondary-btn text-center"
-                href={`/api/reporting/recogidas/export?from=${encodeURIComponent(pickupFrom)}&to=${encodeURIComponent(pickupTo)}&branch=${encodeURIComponent(pickupBranch)}`}
+                href={`/api/reporting/recogidas/export?from=${encodeURIComponent(pickupFrom)}&to=${encodeURIComponent(pickupTo)}&branch=${encodeURIComponent(pickupBranch)}&status=${encodeURIComponent(pickupStatus)}`}
+                download
               >
                 Exportar PDF
               </a>
@@ -809,13 +1090,13 @@ export default async function ReservasPage({ searchParams }: Props) {
                   pickups.map((reservation) => (
                     <tr key={reservation.id}>
                       <td>{reservation.reservationNumber}</td>
-                      <td>{reservation.createdAt}</td>
-                      <td>{reservation.pickupAt}</td>
+                      <td>{formatDateTimeDisplay(reservation.createdAt)}</td>
+                      <td>{formatDateTimeDisplay(reservation.pickupAt)}</td>
                       <td>{reservation.pickupBranch}</td>
                       <td>{reservation.customerName}</td>
                       <td>{reservation.assignedPlate || "N/D"}</td>
                       <td>{reservationStateLabel({ contractId: reservation.contractId, reservationStatus: reservation.reservationStatus })}</td>
-                      <td>{reservation.totalPrice.toFixed(2)}</td>
+                      <td>{formatMoneyDisplay(reservation.totalPrice)}</td>
                       <td className="inline-actions-cell">
                         <a className="secondary-btn text-center" href={`/reservas?tab=gestion&reservationId=${reservation.id}`}>
                           Abrir reserva
@@ -930,7 +1211,7 @@ export default async function ReservasPage({ searchParams }: Props) {
                     <tr key={`${log.reservationId}-${log.sentAt}-${index}`}>
                       <td>{log.reservationNumber}</td>
                       <td>{log.customerName}</td>
-                      <td>{log.sentAt}</td>
+                      <td>{formatDateTimeDisplay(log.sentAt)}</td>
                       <td>{log.to}</td>
                       <td>{log.status}</td>
                       <td>
@@ -966,10 +1247,18 @@ export default async function ReservasPage({ searchParams }: Props) {
               <input name="planningPlate" defaultValue={planningPlate} placeholder="Matrícula" />
               <input name="planningGroup" defaultValue={planningGroup} placeholder="Grupo" />
               <input name="planningModel" defaultValue={planningModel} placeholder="Modelo" />
+              <select name="planningBranch" defaultValue={planningBranch}>
+                <option value="">Todas las sucursales</option>
+                {settings.branches.map((branch) => (
+                  <option key={`planning-branch-${branch.code}`} value={branch.code}>
+                    {branch.name}
+                  </option>
+                ))}
+              </select>
               <button className="secondary-btn" type="submit">Aplicar</button>
               <a
                 className="secondary-btn text-center"
-                href={`/planning-completo?start=${encodeURIComponent(planningStart)}&period=${planningPeriod}&plate=${encodeURIComponent(planningPlate)}&group=${encodeURIComponent(planningGroup)}&model=${encodeURIComponent(planningModel)}`}
+                href={`/planning-completo?start=${encodeURIComponent(planningStart)}&period=${planningPeriod}&plate=${encodeURIComponent(planningPlate)}&group=${encodeURIComponent(planningGroup)}&model=${encodeURIComponent(planningModel)}&branch=${encodeURIComponent(planningBranch ?? "")}`}
                 target="_blank"
                 rel="noopener noreferrer"
               >
@@ -992,7 +1281,7 @@ export default async function ReservasPage({ searchParams }: Props) {
                 <p className="muted-text">Usa la vista completa para trabajar el planning con máximo espacio de pantalla.</p>
                 <a
                   className="primary-btn text-center"
-                  href={`/planning-completo?start=${encodeURIComponent(planningStart)}&period=${planningPeriod}&plate=${encodeURIComponent(planningPlate)}&group=${encodeURIComponent(planningGroup)}&model=${encodeURIComponent(planningModel)}`}
+                  href={`/planning-completo?start=${encodeURIComponent(planningStart)}&period=${planningPeriod}&plate=${encodeURIComponent(planningPlate)}&group=${encodeURIComponent(planningGroup)}&model=${encodeURIComponent(planningModel)}&branch=${encodeURIComponent(planningBranch ?? "")}`}
                   target="_blank"
                   rel="noopener noreferrer"
                 >
@@ -1004,12 +1293,18 @@ export default async function ReservasPage({ searchParams }: Props) {
                   <summary>Detalle de reserva seleccionada</summary>
                   <div className="stack-sm" style={{ marginTop: "0.6rem" }}>
                     <p className="muted-text">Estado: {selectedPlanningItem.status}</p>
-                    <p className="muted-text">Entrega: {selectedPlanningItem.startAt}</p>
-                    <p className="muted-text">Recogida: {selectedPlanningItem.endAt}</p>
                     <p className="muted-text">Referencia: {selectedPlanningItem.label}</p>
-                    <p className="muted-text">Matrícula: {selectedPlanningItem.vehiclePlate}</p>
+                    <p className="muted-text">Cliente: {selectedPlanningReservation?.customerName || "N/D"}</p>
+                    <p className="muted-text">Entrega: {formatDateTimeDisplay(selectedPlanningReservation?.deliveryAt || selectedPlanningItem.startAt)}</p>
+                    <p className="muted-text">Recogida: {formatDateTimeDisplay(selectedPlanningReservation?.pickupAt || selectedPlanningItem.endAt)}</p>
+                    <p className="muted-text">Sucursal entrega: {selectedPlanningReservation?.branchDelivery || "N/D"}</p>
+                    <p className="muted-text">Sucursal recogida: {selectedPlanningReservation?.pickupBranch || "N/D"}</p>
+                    <p className="muted-text">Canal: {selectedPlanningReservation?.salesChannel || "N/D"}</p>
+                    <p className="muted-text">Matrícula: {selectedPlanningReservation?.assignedPlate || selectedPlanningItem.vehiclePlate || "N/D"}</p>
+                    <p className="muted-text">Grupo: {selectedPlanningReservation?.billedCarGroup || selectedPlanningItem.groupLabel || "N/D"}</p>
+                    <p className="muted-text">Total: {selectedPlanningReservation ? formatMoneyDisplay(selectedPlanningReservation.totalPrice) : "N/D"}</p>
                     {selectedPlanningItem.type === "RESERVA" ? (
-                      <a className="secondary-btn text-center" href={`/reservas?q=${encodeURIComponent(selectedPlanningItem.label)}`}>Abrir reserva</a>
+                      <a className="secondary-btn text-center" href={`/reservas?tab=gestion&reservationId=${encodeURIComponent(selectedPlanningItem.referenceId)}`}>Abrir reserva</a>
                     ) : null}
                   </div>
                 </details>
@@ -1195,8 +1490,22 @@ export default async function ReservasPage({ searchParams }: Props) {
                 <option value="CONFIRMADA">Confirmada</option>
                 <option value="CONTRATADA">Contratada</option>
               </select>
-              <input name="reportDeliveryBranch" defaultValue={reportDeliveryBranch} placeholder="Oficina entrega" />
-              <input name="reportPickupBranch" defaultValue={reportPickupBranch} placeholder="Oficina recogida" />
+              <select name="reportDeliveryBranch" defaultValue={reportDeliveryBranch}>
+                <option value="">Oficina entrega</option>
+                {settings.branches.map((branch) => (
+                  <option key={`report-delivery-${branch.code}`} value={branch.code}>
+                    {branch.code} · {branch.name}
+                  </option>
+                ))}
+              </select>
+              <select name="reportPickupBranch" defaultValue={reportPickupBranch}>
+                <option value="">Oficina recogida</option>
+                {settings.branches.map((branch) => (
+                  <option key={`report-pickup-${branch.code}`} value={branch.code}>
+                    {branch.code} · {branch.name}
+                  </option>
+                ))}
+              </select>
               <input name="reportGroup" defaultValue={reportGroup} placeholder="Grupo" />
               <input name="reportCommissioner" defaultValue={reportCommissioner} placeholder="Comisionista" />
               <input name="reportCompany" defaultValue={reportCompany} placeholder="Cliente empresa" />
@@ -1236,24 +1545,67 @@ export default async function ReservasPage({ searchParams }: Props) {
                   reportRows.map((reservation) => (
                     <tr key={reservation.id}>
                       <td>{reservation.reservationNumber}</td>
-                      <td>{reservation.createdAt}</td>
+                      <td>{formatDateTimeDisplay(reservation.createdAt)}</td>
                       <td>{reservationStateLabel({ contractId: reservation.contractId, reservationStatus: reservation.reservationStatus })}</td>
-                      <td>{reservation.deliveryAt}</td>
-                      <td>{reservation.pickupAt}</td>
+                      <td>{formatDateTimeDisplay(reservation.deliveryAt)}</td>
+                      <td>{formatDateTimeDisplay(reservation.pickupAt)}</td>
                       <td>{reservation.appliedRate || "N/D"}</td>
                       <td>{reservation.billedCarGroup || "N/D"}</td>
                       <td>{reservation.billedDays}</td>
                       <td>{reservation.customerCompany || "N/D"}</td>
                       <td>{reservation.customerCommissioner || "N/D"}</td>
-                      <td>{reservation.totalPrice.toFixed(2)}</td>
+                      <td>{formatMoneyDisplay(reservation.totalPrice)}</td>
                     </tr>
                   ))
                 )}
               </tbody>
             </table>
           </div>
-          <p className="muted-text">Reservas: {reportRows.length} | Total reservas: {reportTotal.toFixed(2)}</p>
+          <p className="muted-text">Reservas: {reportRows.length} | Total reservas: {formatMoneyDisplay(reportTotal)}</p>
         </section>
+      ) : null}
+
+      {tab === "presupuestos" ? (
+        <ReservationBudgetTab
+          tariffCatalogs={tariffCatalogs.map((item) => ({
+            plan: {
+              id: item.plan.id,
+              code: item.plan.code,
+              title: tariffPlans.find((plan) => plan.id === item.plan.id)?.title ?? item.plan.code,
+              validFrom: item.plan.validFrom,
+              validTo: item.plan.validTo,
+              updatedAt: item.plan.updatedAt,
+            },
+            brackets: item.brackets,
+            prices: item.prices,
+          }))}
+          groups={categories.map((category) => category.code || category.name).filter(Boolean).toSorted((a, b) => a.localeCompare(b))}
+          insuranceOptions={vehicleExtras
+            .filter((item) => item.active && item.kind === "SEGURO")
+            .map((item) => ({
+              id: item.id,
+              code: item.code,
+              name: item.name,
+              priceMode: item.priceMode,
+              unitPrice: item.unitPrice,
+              maxDays: item.maxDays,
+            }))}
+          extraOptions={vehicleExtras
+            .filter((item) => item.active && item.kind === "EXTRA")
+            .map((item) => ({
+              id: item.id,
+              code: item.code,
+              name: item.name,
+              priceMode: item.priceMode,
+              unitPrice: item.unitPrice,
+              maxDays: item.maxDays,
+            }))}
+          courtesyHours={settings.courtesyHours ?? 0}
+          canWrite={canWrite}
+          previewTemplateHtml={activeBudgetTemplate?.htmlContent ?? ""}
+          previewLanguage={activeBudgetTemplate?.language ?? "es"}
+          sendBudgetEmailAction={sendBudgetEmailAction}
+        />
       ) : null}
     </div>
   );

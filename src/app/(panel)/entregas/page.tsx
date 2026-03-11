@@ -1,6 +1,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { getSessionUser } from "@/lib/auth";
+import { getSelectedBranchId, getSessionUser } from "@/lib/auth";
+import { formatDateTimeDisplay, formatMoneyDisplay } from "@/lib/formatting";
 import { deleteReservation, listDeliveries } from "@/lib/services/rental-service";
 
 type Props = {
@@ -25,13 +26,14 @@ export default async function EntregasPage({ searchParams }: Props) {
   if (!user) {
     redirect("/login");
   }
+  const selectedBranchId = await getSelectedBranchId();
 
   const params = await searchParams;
   const canWrite = user.role !== "LECTOR";
   const range = defaultRange();
   const from = params.from ?? range.from;
   const to = params.to ?? range.to;
-  const branch = params.branch ?? "";
+  const branch = params.branch ?? selectedBranchId;
 
   const deliveries = await listDeliveries({ from: `${from}T00:00:00`, to: `${to}T23:59:59`, branch });
 
@@ -98,6 +100,7 @@ function DeliveryTable({
           <tr>
             <th>Nº reserva</th>
             <th>Contrato</th>
+            <th>Fecha/hora</th>
             <th>Lugar</th>
             <th>Cliente</th>
             <th>Precio</th>
@@ -110,16 +113,17 @@ function DeliveryTable({
         <tbody>
           {rows.length === 0 ? (
             <tr>
-              <td colSpan={9} className="muted-text">Sin registros.</td>
+              <td colSpan={10} className="muted-text">Sin registros.</td>
             </tr>
           ) : (
             rows.map((row) => (
-              <tr key={`${row.reservationId}-${row.datetime}`}>
+              <tr key={`${row.reservationId}-${row.datetimeRaw}`}>
                 <td>{row.reservationNumber}</td>
                 <td>{row.contractNumber || "N/D"}</td>
+                <td>{formatDateTimeDisplay(row.datetimeRaw)}</td>
                 <td>{row.place || "N/D"}</td>
                 <td>{row.customerName}</td>
-                <td>{row.totalPrice.toFixed(2)}</td>
+                <td>{formatMoneyDisplay(row.totalPrice)}</td>
                 <td>{row.vehiclePlate || "N/D"}</td>
                 <td>{row.days}</td>
                 <td>{row.privateNotes || "N/D"}</td>

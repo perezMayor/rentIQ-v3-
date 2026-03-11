@@ -1,6 +1,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { getSessionUser } from "@/lib/auth";
+import { getSelectedBranchId, getSessionUser } from "@/lib/auth";
+import { getActionErrorMessage } from "@/lib/action-errors";
 import { getDocumentCompanyName } from "@/lib/company-brand";
 import { getCompanySettings, listContracts, listInvoices, updateCompanySettings } from "@/lib/services/rental-service";
 
@@ -33,13 +34,14 @@ export default async function ConfiguracionPage({ searchParams }: Props) {
   if (!user) {
     redirect("/login");
   }
+  const selectedBranchId = await getSelectedBranchId();
 
   const canWrite = user.role !== "LECTOR";
   const settings = await getCompanySettings();
   const params = await searchParams;
   const tab = normalizeTab((params.tab ?? "identidad").toLowerCase());
   const subtab = normalizeSubtab(tab, (params.subtab ?? "").toLowerCase());
-  const selectedBranchCode = (params.branchCode ?? settings.branches[0]?.code ?? "").trim().toUpperCase();
+  const selectedBranchCode = (params.branchCode ?? selectedBranchId ?? settings.branches[0]?.code ?? "").trim().toUpperCase();
   const [contracts, invoices] = await Promise.all([listContracts(""), listInvoices("")]);
   const contractsByBranch = contracts.filter((item) => item.branchCode.toUpperCase() === selectedBranchCode);
   const invoicesByBranch = invoices.filter((item) => {
@@ -75,28 +77,13 @@ export default async function ConfiguracionPage({ searchParams }: Props) {
       input.logoDataUrl = `data:${logoFile.type};base64,${buffer.toString("base64")}`;
     }
 
-    const contractBackFile = formData.get("contractBackFile");
-    if (contractBackFile instanceof File && contractBackFile.size > 0) {
-      const acceptedTypes = ["text/plain", "text/html", "text/markdown"];
-      if (!acceptedTypes.includes(contractBackFile.type)) {
-        redirect(`/configuracion?tab=${nextTab}&subtab=${nextSubtab}&error=Archivo+de+reverso+inválido+(solo+TXT,+MD+o+HTML)`);
-      }
-      const maxBytes = 2 * 1024 * 1024;
-      if (contractBackFile.size > maxBytes) {
-        redirect(`/configuracion?tab=${nextTab}&subtab=${nextSubtab}&error=Archivo+de+reverso+demasiado+grande+(max+2MB)`);
-      }
-      const rawText = Buffer.from(await contractBackFile.arrayBuffer()).toString("utf8").trim();
-      input.contractBackContent = rawText;
-      input.contractBackContentType = contractBackFile.type === "text/html" ? "HTML" : "TEXT";
-    }
-
     try {
       await updateCompanySettings(input, { id: actor.id, role: actor.role });
       revalidatePath("/configuracion");
       revalidatePath("/gestor");
       redirect(`/configuracion?tab=${nextTab}&subtab=${nextSubtab}&ok=Configuracion+guardada`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error guardando configuracion";
+      const message = getActionErrorMessage(error, "Error guardando configuracion");
       redirect(`/configuracion?tab=${nextTab}&subtab=${nextSubtab}&error=${encodeURIComponent(message)}`);
     }
   }
@@ -227,30 +214,6 @@ export default async function ConfiguracionPage({ searchParams }: Props) {
                     name="contractFrontFooter"
                     rows={3}
                     defaultValue={settings.contractFrontFooter || settings.documentFooter || ""}
-                    disabled={!canWrite}
-                  />
-                </label>
-                <label>
-                  Tipo contenido reverso
-                  <select
-                    name="contractBackContentType"
-                    defaultValue={settings.contractBackContentType === "HTML" ? "HTML" : "TEXT"}
-                    disabled={!canWrite}
-                  >
-                    <option value="TEXT">Texto</option>
-                    <option value="HTML">HTML</option>
-                  </select>
-                </label>
-                <label>
-                  Cargar archivo reverso (TXT, MD o HTML)
-                  <input name="contractBackFile" type="file" accept=".txt,.md,.html,text/plain,text/markdown,text/html" disabled={!canWrite} />
-                </label>
-                <label className="col-span-2">
-                  Contenido reverso
-                  <textarea
-                    name="contractBackContent"
-                    rows={14}
-                    defaultValue={settings.contractBackContent || ""}
                     disabled={!canWrite}
                   />
                 </label>

@@ -1,7 +1,7 @@
 // Página del módulo planning-completo.
 import { redirect } from "next/navigation";
 import { getSessionUser } from "@/lib/auth";
-import { getCompanySettings, listPlanning } from "@/lib/services/rental-service";
+import { getCompanySettings, listContracts, listPlanning, listReservations } from "@/lib/services/rental-service";
 import { PlanningCellLink } from "@/app/planning-completo/planning-cell-link";
 import styles from "./planning-completo-v2.module.css";
 
@@ -21,6 +21,14 @@ type CellData = {
   overlap: boolean;
   title: string;
   segment: "single" | "start" | "middle" | "end" | "none";
+};
+
+type PlanningRowView = {
+  groupLabel: string;
+  modelLabel: string;
+  plateLabel: string;
+  rowType: "MATRICULA" | "HUERFANA";
+  cells: CellData[];
 };
 
 function parseDateSafe(value: string) {
@@ -125,7 +133,7 @@ export default async function PlanningCompletoPage({ searchParams }: Props) {
   const branch = params.branch ?? "";
   const selected = params.selected ?? "";
 
-  const [planning, companySettings] = await Promise.all([
+  const [planning, companySettings, reservations, contracts] = await Promise.all([
     listPlanning({
       startDate: start,
       periodDays: period,
@@ -135,6 +143,8 @@ export default async function PlanningCompletoPage({ searchParams }: Props) {
       branchFilter: branch,
     }),
     getCompanySettings(),
+    listReservations(""),
+    listContracts(""),
   ]);
 
   const planningDays = buildPlanningDays(start, period);
@@ -149,8 +159,32 @@ export default async function PlanningCompletoPage({ searchParams }: Props) {
     return acc;
   }, []);
 
-  const rows = planning.flatMap((groupNode) =>
-    groupNode.models.flatMap((modelNode) =>
+  const rows: PlanningRowView[] = planning.flatMap((groupNode) => {
+    if (groupNode.models.length === 0) {
+      return [
+        {
+          groupLabel: groupNode.groupLabel,
+          modelLabel: "",
+          plateLabel: "",
+          rowType: "MATRICULA" as const,
+          cells: planningDays.map((): CellData => ({
+            status: "",
+            selectedId: "",
+            reservationId: "",
+            groupLabel: groupNode.groupLabel,
+            isReservable: false,
+            openHref: "",
+            contractHref: "",
+            auditHref: "",
+            overlap: false,
+            title: "Disponible",
+            segment: "none",
+          })),
+        },
+      ];
+    }
+
+    return groupNode.models.flatMap((modelNode) =>
       modelNode.rows.map((row) => {
         const cells: CellData[] = planningDays.map((day) => {
           const dayItems = row.items.filter((item) => overlapsDay(item.startAt, item.endAt, day.startAt, day.endAt));
@@ -159,7 +193,7 @@ export default async function PlanningCompletoPage({ searchParams }: Props) {
               status: "",
               selectedId: "",
               reservationId: "",
-              groupLabel: row.items[0]?.groupLabel ?? "",
+              groupLabel: row.items[0]?.groupLabel ?? groupNode.groupLabel,
               isReservable: false,
               openHref: "",
               contractHref: "",
@@ -201,16 +235,16 @@ export default async function PlanningCompletoPage({ searchParams }: Props) {
           cells,
         };
       }),
-    ),
-  );
+    );
+  });
 
   const allItems = planning.flatMap((g) => g.models.flatMap((m) => m.rows.flatMap((r) => r.items)));
   const selectedItem = allItems.find((item) => item.id === selected) ?? null;
+  const selectedReservation =
+    selectedItem?.type === "RESERVA" ? reservations.find((item) => item.id === selectedItem.referenceId) ?? null : null;
+  const selectedContract =
+    selectedItem?.contractId ? contracts.find((item) => item.id === selectedItem.contractId) ?? null : null;
 
-  const leftFleetTree = planning.map((g) => ({
-    group: g.groupLabel,
-    models: g.models.map((m) => ({ model: m.modelLabel, count: m.rows.length })),
-  }));
   const orphanDeficitByGroup = planning
     .map((groupNode) => ({
       group: groupNode.groupLabel,
@@ -225,9 +259,9 @@ export default async function PlanningCompletoPage({ searchParams }: Props) {
   const baseQuery = `start=${encodeURIComponent(start)}&period=${period}&plate=${encodeURIComponent(plate)}&group=${encodeURIComponent(group)}&model=${encodeURIComponent(model)}&branch=${encodeURIComponent(branch)}`;
   const leftWidth = 160;
   const rightWidth = selectedItem ? 300 : 0;
-  const col1 = 52;
-  const col2 = 20;
-  const col3 = 68;
+  const col1 = 28;
+  const col2 = 108;
+  const col3 = 74;
   const prevStart = new Date(`${start}T00:00:00`);
   prevStart.setDate(prevStart.getDate() - period);
   const nextStart = new Date(`${start}T00:00:00`);
@@ -287,32 +321,25 @@ export default async function PlanningCompletoPage({ searchParams }: Props) {
           </form>
 
           <div className={styles.treeWrap}>
-            <div className={styles.treeTitle}>FLOTA</div>
-            {leftFleetTree.length === 0 ? <p className={styles.muted}>Sin datos</p> : null}
-            {leftFleetTree.map((node) => (
-              <details key={node.group} open>
-                <summary>{node.group}</summary>
-                <ul>
-                  {node.models.map((modelNode) => (
-                    <li key={`${node.group}-${modelNode.model}`}>{modelNode.model} ({modelNode.count})</li>
-                  ))}
-                </ul>
-              </details>
-            ))}
-            <div className={styles.deficitWrap}>
-              <div className={styles.treeTitle}>DÉFICIT POR GRUPO</div>
-              {orphanDeficitByGroup.length === 0 ? (
-                <p className={styles.muted}>Sin déficit</p>
-              ) : (
-                <ul className={styles.deficitList}>
-                  {orphanDeficitByGroup.map((item) => (
-                    <li key={`deficit-${item.group}`}>
-                      {item.group} ({item.deficit})
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
+            <section className={styles.sideCard}>
+              <div className={styles.sideCardHeader}>
+                <div className={styles.treeTitle}>DÉFICIT POR GRUPO</div>
+              </div>
+              <div className={styles.sideCardBody}>
+                {orphanDeficitByGroup.length === 0 ? (
+                  <p className={styles.muted}>Sin déficit</p>
+                ) : (
+                  <ul className={styles.deficitList}>
+                    {orphanDeficitByGroup.map((item) => (
+                      <li key={`deficit-${item.group}`}>
+                        <span>{item.group}</span>
+                        <strong>{item.deficit}</strong>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </section>
           </div>
 
           <div className={styles.backLinks}>
@@ -348,9 +375,9 @@ export default async function PlanningCompletoPage({ searchParams }: Props) {
             <table className={styles.gantt}>
               <thead>
                 <tr>
-                  <th className={styles.stickyCol} style={{ left: 0, width: col1, minWidth: col1, maxWidth: col1, padding: "0 2px", textAlign: "center" }} rowSpan={2}>Mat</th>
-                  <th className={styles.stickyCol} style={{ left: col1, width: col2, minWidth: col2, maxWidth: col2, padding: "0 1px", textAlign: "center" }} rowSpan={2}>Gr</th>
-                  <th className={styles.stickyCol} style={{ left: col1 + col2, width: col3, minWidth: col3, maxWidth: col3, padding: "0 2px", textAlign: "center" }} rowSpan={2}>Model.</th>
+                  <th className={styles.stickyCol} style={{ left: 0, width: col1, minWidth: col1, maxWidth: col1, padding: "0 1px", textAlign: "center" }} rowSpan={2}>Gr.</th>
+                  <th className={styles.stickyCol} style={{ left: col1, width: col2, minWidth: col2, maxWidth: col2, padding: "0 6px", textAlign: "left" }} rowSpan={2}>Modelo</th>
+                  <th className={styles.stickyCol} style={{ left: col1 + col2, width: col3, minWidth: col3, maxWidth: col3, padding: "0 6px", textAlign: "left" }} rowSpan={2}>Matrícula</th>
                   {monthHeaders.map((month, idx) => (
                     <th key={`${month.label}-${idx}`} colSpan={month.span} className={styles.monthHead}>{month.label}</th>
                   ))}
@@ -364,9 +391,21 @@ export default async function PlanningCompletoPage({ searchParams }: Props) {
               <tbody>
                 {rows.map((row, rowIndex) => (
                   <tr key={`${row.plateLabel}-${row.modelLabel}-${rowIndex}`}>
-                    <td className={styles.stickyCol} style={{ left: 0, width: col1, minWidth: col1, maxWidth: col1, padding: "0 2px", textAlign: "center" }}>{row.plateLabel}</td>
-                    <td className={styles.stickyCol} style={{ left: col1, width: col2, minWidth: col2, maxWidth: col2, padding: "0 1px", textAlign: "center" }}>{row.groupLabel}</td>
-                    <td className={styles.stickyCol} style={{ left: col1 + col2, width: col3, minWidth: col3, maxWidth: col3, padding: "0 2px", textAlign: "center" }}>{row.modelLabel}</td>
+                    <td className={styles.stickyCol} style={{ left: 0, width: col1, minWidth: col1, maxWidth: col1, padding: "0 1px", textAlign: "center" }}>{row.groupLabel}</td>
+                    <td
+                      className={styles.stickyCol}
+                      style={{ left: col1, width: col2, minWidth: col2, maxWidth: col2, padding: "0 6px", textAlign: "left" }}
+                      title={row.modelLabel}
+                    >
+                      {row.modelLabel}
+                    </td>
+                    <td
+                      className={styles.stickyCol}
+                      style={{ left: col1 + col2, width: col3, minWidth: col3, maxWidth: col3, padding: "0 6px", textAlign: "left" }}
+                      title={row.plateLabel}
+                    >
+                      {row.plateLabel}
+                    </td>
                     {row.cells.map((cell, cellIndex) => {
                       const day = planningDays[cellIndex];
                       const isSunday = Boolean(day?.isSunday);
@@ -437,16 +476,50 @@ export default async function PlanningCompletoPage({ searchParams }: Props) {
               <dd>{selectedItem.label}</dd>
               <dt>Estado</dt>
               <dd>{selectedItem.status}</dd>
+              {selectedReservation ? (
+                <>
+                  <dt>Cliente</dt>
+                  <dd>{selectedReservation.customerName}</dd>
+                  <dt>Empresa</dt>
+                  <dd>{selectedReservation.customerCompany || "N/D"}</dd>
+                  <dt>Comisionista</dt>
+                  <dd>{selectedReservation.customerCommissioner || "N/D"}</dd>
+                  <dt>Canal</dt>
+                  <dd>{selectedReservation.salesChannel || "N/D"}</dd>
+                </>
+              ) : null}
               <dt>Entrega</dt>
-              <dd>{selectedItem.startAt}</dd>
+              <dd>{selectedReservation?.deliveryAt || selectedItem.startAt}</dd>
               <dt>Recogida</dt>
-              <dd>{selectedItem.endAt}</dd>
+              <dd>{selectedReservation?.pickupAt || selectedItem.endAt}</dd>
+              {selectedReservation ? (
+                <>
+                  <dt>Sucursal entrega</dt>
+                  <dd>{selectedReservation.branchDelivery || "N/D"}</dd>
+                  <dt>Sucursal recogida</dt>
+                  <dd>{selectedReservation.pickupBranch || "N/D"}</dd>
+                </>
+              ) : null}
               <dt>Matrícula</dt>
-              <dd>{selectedItem.vehiclePlate}</dd>
+              <dd>{selectedReservation?.assignedPlate || selectedItem.vehiclePlate}</dd>
               <dt>Grupo</dt>
-              <dd>{selectedItem.groupLabel}</dd>
+              <dd>{selectedReservation?.billedCarGroup || selectedItem.groupLabel}</dd>
               <dt>Modelo</dt>
               <dd>{selectedItem.modelLabel}</dd>
+              {selectedReservation ? (
+                <>
+                  <dt>Total</dt>
+                  <dd>{selectedReservation.totalPrice.toFixed(2)}</dd>
+                  <dt>Notas públicas</dt>
+                  <dd>{selectedReservation.publicNotes || "N/D"}</dd>
+                </>
+              ) : null}
+              {selectedContract ? (
+                <>
+                  <dt>Contrato</dt>
+                  <dd>{selectedContract.contractNumber}</dd>
+                </>
+              ) : null}
             </dl>
             <a className={styles.closePanel} href={`/planning-completo?${baseQuery}`}>Cerrar resumen</a>
           </aside>

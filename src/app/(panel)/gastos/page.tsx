@@ -2,6 +2,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getSessionUser } from "@/lib/auth";
+import { getActionErrorMessage } from "@/lib/action-errors";
 import {
   createDailyOperationalExpense,
   deleteInternalExpense,
@@ -61,7 +62,7 @@ export default async function GastosPage({ searchParams }: Props) {
         `/gastos?from=${from}&to=${to}&plate=${encodeURIComponent(plate)}&worker=${encodeURIComponent(worker)}&expenseDate=${encodeURIComponent(expenseDate)}`,
       );
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error guardando gasto diario";
+      const message = getActionErrorMessage(error, "Error guardando gasto diario");
       redirect(
         `/gastos?from=${from}&to=${to}&plate=${encodeURIComponent(plate)}&worker=${encodeURIComponent(worker)}&expenseDate=${encodeURIComponent(expenseDate)}&error=${encodeURIComponent(message)}`,
       );
@@ -84,7 +85,7 @@ export default async function GastosPage({ searchParams }: Props) {
       revalidatePath("/vehiculos");
       redirect(`/gastos?from=${from}&to=${to}&plate=${encodeURIComponent(plate)}&worker=${encodeURIComponent(worker)}&expenseDate=${encodeURIComponent(expenseDate)}`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error al editar gasto";
+      const message = getActionErrorMessage(error, "Error al editar gasto");
       redirect(`/gastos?from=${from}&to=${to}&plate=${encodeURIComponent(plate)}&worker=${encodeURIComponent(worker)}&expenseDate=${encodeURIComponent(expenseDate)}&error=${encodeURIComponent(message)}`);
     }
   }
@@ -102,7 +103,7 @@ export default async function GastosPage({ searchParams }: Props) {
       revalidatePath("/vehiculos");
       redirect(`/gastos?from=${from}&to=${to}&plate=${encodeURIComponent(plate)}&worker=${encodeURIComponent(worker)}&expenseDate=${encodeURIComponent(expenseDate)}`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error al borrar gasto";
+      const message = getActionErrorMessage(error, "Error al borrar gasto");
       redirect(`/gastos?from=${from}&to=${to}&plate=${encodeURIComponent(plate)}&worker=${encodeURIComponent(worker)}&expenseDate=${encodeURIComponent(expenseDate)}&error=${encodeURIComponent(message)}`);
     }
   }

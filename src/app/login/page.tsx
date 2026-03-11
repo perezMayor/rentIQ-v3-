@@ -1,11 +1,14 @@
 import { redirect } from "next/navigation";
 import Image from "next/image";
+import Link from "next/link";
 import { getSessionUser } from "@/lib/auth";
-import { BRANCHES, DEFAULT_BRANCH_ID, isBranchId, type BranchId } from "@/lib/branches";
+import { DEFAULT_BRANCH_ID, normalizeBranchId } from "@/lib/branches";
 import { getCompanySettings } from "@/lib/services/rental-service";
 
+export const dynamic = "force-dynamic";
+
 type LoginPageProps = {
-  searchParams?: Promise<Record<string, string | string[] | undefined>> | Record<string, string | string[] | undefined>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
 export default async function LoginPage({ searchParams }: LoginPageProps) {
@@ -15,17 +18,23 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
   if (session) {
     redirect("/dashboard");
   }
-  const params = await Promise.resolve(searchParams ?? {});
+  const params = (await searchParams) ?? {};
   const companySettings = await getCompanySettings();
   const rawError = Array.isArray(params.error) ? params.error[0] : params.error;
   const rawBranch = Array.isArray(params.branch) ? params.branch[0] : params.branch;
-  const selectedBranch: BranchId = rawBranch && isBranchId(rawBranch) ? rawBranch : DEFAULT_BRANCH_ID;
   const companyName = companySettings.companyName?.trim() || "Empresa";
+  const branches = companySettings.branches.map((branch) => ({
+    id: normalizeBranchId(branch.code),
+    label: `${branch.code} · ${branch.name}`,
+  }));
+  const selectedBranch = branches.find((item) => item.id === normalizeBranchId(rawBranch ?? ""))?.id ?? branches[0]?.id ?? DEFAULT_BRANCH_ID;
   const errorText =
     rawError === "invalid"
       ? "Credenciales inválidas."
       : rawError === "missing"
         ? "Debes completar correo y contraseña."
+        : rawError === "branch_missing"
+          ? "Debes configurar al menos una sucursal para acceder."
         : null;
 
   return (
@@ -44,8 +53,9 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
             {companyName}
           </p>
           <label htmlFor="branch">Sucursal</label>
-          <select id="branch" name="branch" defaultValue={selectedBranch} required>
-            {BRANCHES.map((branch) => (
+          <select id="branch" name="branch" defaultValue={selectedBranch} required disabled={branches.length === 0}>
+            {branches.length === 0 ? <option value="">Sin sucursales configuradas</option> : null}
+            {branches.map((branch) => (
               <option key={branch.id} value={branch.id}>
                 {branch.label}
               </option>
@@ -54,6 +64,9 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
           <button className="primary-btn" type="submit">
             Entrar
           </button>
+          <Link href="/login/recuperar" className="text-center muted-text">
+            He olvidado mi contraseña
+          </Link>
         </form>
       </section>
     </main>

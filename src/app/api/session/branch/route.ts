@@ -1,7 +1,8 @@
 // Endpoint HTTP de session/branch.
 import { NextResponse } from "next/server";
 import { BRANCH_COOKIE, requireSessionUser } from "@/lib/auth";
-import { DEFAULT_BRANCH_ID, isBranchId } from "@/lib/branches";
+import { DEFAULT_BRANCH_ID, normalizeBranchId } from "@/lib/branches";
+import { getCompanySettings } from "@/lib/services/rental-service";
 
 export async function POST(request: Request) {
   try {
@@ -11,9 +12,11 @@ export async function POST(request: Request) {
   }
 
   const body = (await request.json().catch(() => ({}))) as { branch?: string };
-  const branch = typeof body.branch === "string" ? body.branch : "";
+  const branch = normalizeBranchId(typeof body.branch === "string" ? body.branch : "");
+  const settings = await getCompanySettings();
+  const validBranches = settings.branches.map((item) => normalizeBranchId(item.code));
 
-  if (!isBranchId(branch)) {
+  if (!branch || !validBranches.includes(branch)) {
     return NextResponse.json({ ok: false, error: "INVALID_BRANCH" }, { status: 400 });
   }
 

@@ -108,36 +108,55 @@
 }
 
 .treeWrap {
-  flex: 0 1 auto;
-  min-height: 0;
-  max-height: 48vh;
-  overflow: auto;
+  flex: 0 0 auto;
   padding: 8px;
+  display: block;
+  gap: 8px;
 }
 
 .treeTitle {
   font-size: 12px;
   font-weight: 800;
-  margin-bottom: 6px;
   color: var(--color-text-primary);
 }
 
-.treeWrap details {
+.sideCard {
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--color-surface-strong) 92%, transparent);
+  box-shadow: var(--shadow-soft);
+  display: grid;
+  grid-template-rows: auto auto;
+  min-height: unset;
+}
+
+.sideCardHeader {
+  padding: 8px 10px 6px;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
+}
+
+.sideCardBody {
+  max-height: 220px;
+  overflow: auto;
+  padding: 8px 10px 10px;
+}
+
+.sideCardBody details {
   margin: 0 0 4px;
 }
 
-.treeWrap summary {
+.sideCardBody summary {
   cursor: pointer;
   font-weight: 700;
   font-size: 13px;
 }
 
-.treeWrap ul {
+.sideCardBody ul {
   margin: 4px 0 8px 14px;
   padding: 0;
 }
 
-.treeWrap li {
+.sideCardBody li {
   font-size: 12px;
   line-height: 1.4;
 }
@@ -152,14 +171,23 @@
 
 .deficitList {
   margin: 0;
-  padding: 0 0 0 14px;
+  padding: 0;
   display: grid;
-  gap: 2px;
+  gap: 6px;
 }
 
 .deficitList li {
+  list-style: none;
   font-size: 12px;
   line-height: 1.4;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
+  border-radius: 10px;
+  padding: 6px 8px;
+  background: color-mix(in srgb, var(--color-surface) 86%, transparent);
 }
 
 .backLink {
@@ -323,21 +351,27 @@
 .gantt td.stickyCol:nth-child(1),
 .gantt th.stickyCol:nth-child(1) {
   left: 0;
-  min-width: 70px;
+  min-width: 28px;
+  max-width: 28px;
+  text-align: center;
 }
 
 .gantt td.stickyCol:nth-child(2),
 .gantt th.stickyCol:nth-child(2) {
-  left: 70px;
-  min-width: 30px;
-  text-align: center;
+  left: 28px;
+  min-width: 108px;
+  max-width: 108px;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .gantt td.stickyCol:nth-child(3),
 .gantt th.stickyCol:nth-child(3) {
-  left: 100px;
-  min-width: 100px;
-  max-width: 100px;
+  left: 136px;
+  min-width: 74px;
+  max-width: 74px;
+  text-align: left;
   overflow: hidden;
   text-overflow: ellipsis;
 }

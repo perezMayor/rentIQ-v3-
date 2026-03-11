@@ -57,20 +57,3 @@ export async function sendMailFromCompany(input: {
     attachments: input.attachments,
   });
 }
-
-export async function verifySmtpConnection(input: { fromOverride?: string; to?: string }) {
-  const { transporter, config } = createCompanyTransporter();
-  const from = (input.fromOverride || config.envFrom || "").trim();
-  if (!from || !from.includes("@")) {
-    throw new Error("MAIL_FROM no válido");
-  }
-  await transporter.verify();
-  if (input.to?.trim()) {
-    await transporter.sendMail({
-      from,
-      to: input.to.trim(),
-      subject: "Prueba SMTP RentIQ",
-      html: "<p>Prueba técnica de conexión SMTP correcta.</p>",
-    });
-  }
-}

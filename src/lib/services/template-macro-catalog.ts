@@ -1,6 +1,6 @@
 // Servicio de negocio para template macro catalog.
 export type TemplateMacroGroup = {
-  key: "CONFIRMACION_RESERVA" | "CONTRATO" | "FACTURA";
+  key: "CONFIRMACION_RESERVA" | "PRESUPUESTO" | "CONTRATO" | "FACTURA";
   title: string;
   macros: Array<{ macro: string; description: string }>;
 };
@@ -44,6 +44,34 @@ export const TEMPLATE_MACRO_GROUPS: TemplateMacroGroup[] = [
       { macro: "{company_logo_data_url}", description: "Logo (data URL)." },
       { macro: "{company_brand_primary_color}", description: "Color principal marca." },
       { macro: "{company_brand_secondary_color}", description: "Color secundario marca." },
+    ],
+  },
+
+  {
+    key: "PRESUPUESTO",
+    title: "Presupuesto",
+    macros: [
+      { macro: "{delivery_date}", description: "Fecha entrega." },
+      { macro: "{delivery_time}", description: "Hora entrega." },
+      { macro: "{delivery_place}", description: "Lugar entrega." },
+      { macro: "{pickup_date}", description: "Fecha recogida." },
+      { macro: "{pickup_time}", description: "Hora recogida." },
+      { macro: "{pickup_place}", description: "Lugar recogida." },
+      { macro: "{applied_rate}", description: "Tarifa aplicada." },
+      { macro: "{billed_car_group}", description: "Grupo presupuestado." },
+      { macro: "{billed_days}", description: "Días facturados." },
+      { macro: "{base_amount}", description: "Alquiler." },
+      { macro: "{discount_amount}", description: "Descuento." },
+      { macro: "{insurance_amount}", description: "Seguros." },
+      { macro: "{extras_amount}", description: "Extras." },
+      { macro: "{fuel_amount}", description: "Combustible." },
+      { macro: "{total_amount}", description: "Total presupuesto." },
+      { macro: "{company_document_name}", description: "Nombre documental empresa." },
+      { macro: "{company_email_from}", description: "Email empresa." },
+      { macro: "{company_phone}", description: "Teléfono empresa." },
+      { macro: "{company_document_footer}", description: "Pie documental configurado." },
+      { macro: "{extra#01}", description: "Concepto 1 (hasta {extra#06})." },
+      { macro: "{extra#01total}", description: "Total concepto 1 (hasta {extra#06total})." },
     ],
   },
   {

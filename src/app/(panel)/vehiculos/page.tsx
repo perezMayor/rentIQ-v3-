@@ -2,6 +2,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getSessionUser } from "@/lib/auth";
+import { getActionErrorMessage } from "@/lib/action-errors";
 import {
   createFleetVehicle,
   createVehicleCategory,
@@ -27,8 +28,11 @@ import {
   updateVehicleExtra,
   updateVehicleModel,
 } from "@/lib/services/rental-service";
+import { FleetCreateForm } from "@/app/(panel)/vehiculos/fleet-create-form";
 
-type TabKey = "grupos" | "modelos" | "altas-bajas" | "listados" | "produccion" | "extras";
+const FUEL_OPTIONS = ["GASOLINA", "DIESEL", "HIBRIDO", "HIBRIDO_ENCHUFABLE", "ELECTRICO", "GLP"];
+
+type TabKey = "grupos" | "modelos" | "altas-bajas" | "listados" | "produccion" | "seguros" | "extras";
 
 type Props = {
   searchParams: Promise<{
@@ -64,6 +68,7 @@ const TABS: Array<{ key: TabKey; label: string }> = [
   { key: "altas-bajas", label: "Altas / bajas" },
   { key: "listados", label: "Listados" },
   { key: "produccion", label: "Producción" },
+  { key: "seguros", label: "Seguros" },
   { key: "extras", label: "Extras" },
 ];
 
@@ -73,13 +78,15 @@ export default async function VehiculosPage({ searchParams }: Props) {
   if (user.role === "LECTOR") redirect("/dashboard");
 
   const params = await searchParams;
-  const canWrite = user.role !== "LECTOR";
+  const canWrite = true;
   const tab = (TABS.find((item) => item.key === params.tab)?.key ?? "grupos") as TabKey;
 
   const models = await listVehicleModels();
   const categories = await listVehicleCategories();
   const fleet = await listFleetVehicles();
   const extras = await listVehicleExtras();
+  const insuranceCatalog = extras.filter((item) => item.kind === "SEGURO");
+  const extrasCatalog = extras.filter((item) => item.kind === "EXTRA");
   const settings = await getCompanySettings();
   const providerOptions = settings.providers ?? [];
 
@@ -113,7 +120,7 @@ export default async function VehiculosPage({ searchParams }: Props) {
       revalidatePath("/vehiculos");
       redirect("/vehiculos?tab=grupos");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error al crear grupo";
+      const message = getActionErrorMessage(error, "Error al crear grupo");
       redirect(`/vehiculos?tab=grupos&error=${encodeURIComponent(message)}`);
     }
   }
@@ -132,7 +139,7 @@ export default async function VehiculosPage({ searchParams }: Props) {
       revalidatePath("/vehiculos");
       redirect("/vehiculos?tab=grupos");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error al editar grupo";
+      const message = getActionErrorMessage(error, "Error al editar grupo");
       redirect(`/vehiculos?tab=grupos&error=${encodeURIComponent(message)}`);
     }
   }
@@ -148,7 +155,7 @@ export default async function VehiculosPage({ searchParams }: Props) {
       revalidatePath("/vehiculos");
       redirect("/vehiculos?tab=grupos");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error al borrar grupo";
+      const message = getActionErrorMessage(error, "Error al borrar grupo");
       redirect(`/vehiculos?tab=grupos&error=${encodeURIComponent(message)}`);
     }
   }
@@ -166,7 +173,7 @@ export default async function VehiculosPage({ searchParams }: Props) {
       revalidatePath("/vehiculos");
       redirect("/vehiculos?tab=modelos");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error al crear modelo";
+      const message = getActionErrorMessage(error, "Error al crear modelo");
       redirect(`/vehiculos?tab=modelos&error=${encodeURIComponent(message)}`);
     }
   }
@@ -185,7 +192,7 @@ export default async function VehiculosPage({ searchParams }: Props) {
       revalidatePath("/vehiculos");
       redirect("/vehiculos?tab=modelos");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error al editar modelo";
+      const message = getActionErrorMessage(error, "Error al editar modelo");
       redirect(`/vehiculos?tab=modelos&error=${encodeURIComponent(message)}`);
     }
   }
@@ -201,7 +208,7 @@ export default async function VehiculosPage({ searchParams }: Props) {
       revalidatePath("/vehiculos");
       redirect("/vehiculos?tab=modelos");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error al borrar modelo";
+      const message = getActionErrorMessage(error, "Error al borrar modelo");
       redirect(`/vehiculos?tab=modelos&error=${encodeURIComponent(message)}`);
     }
   }
@@ -219,7 +226,7 @@ export default async function VehiculosPage({ searchParams }: Props) {
       revalidatePath("/vehiculos");
       redirect("/vehiculos?tab=altas-bajas");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error en alta";
+      const message = getActionErrorMessage(error, "Error en alta");
       redirect(`/vehiculos?tab=altas-bajas&error=${encodeURIComponent(message)}`);
     }
   }
@@ -237,7 +244,7 @@ export default async function VehiculosPage({ searchParams }: Props) {
       revalidatePath("/vehiculos");
       redirect("/vehiculos?tab=altas-bajas");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error en baja";
+      const message = getActionErrorMessage(error, "Error en baja");
       redirect(`/vehiculos?tab=altas-bajas&error=${encodeURIComponent(message)}`);
     }
   }
@@ -256,7 +263,7 @@ export default async function VehiculosPage({ searchParams }: Props) {
       revalidatePath("/vehiculos");
       redirect("/vehiculos?tab=altas-bajas");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error al editar vehículo";
+      const message = getActionErrorMessage(error, "Error al editar vehículo");
       redirect(`/vehiculos?tab=altas-bajas&error=${encodeURIComponent(message)}`);
     }
   }
@@ -272,7 +279,7 @@ export default async function VehiculosPage({ searchParams }: Props) {
       revalidatePath("/vehiculos");
       redirect("/vehiculos?tab=altas-bajas");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error al borrar vehículo";
+      const message = getActionErrorMessage(error, "Error al borrar vehículo");
       redirect(`/vehiculos?tab=altas-bajas&error=${encodeURIComponent(message)}`);
     }
   }
@@ -281,17 +288,18 @@ export default async function VehiculosPage({ searchParams }: Props) {
     "use server";
     const actor = await getSessionUser();
     if (!actor) redirect("/login");
-    if (actor.role === "LECTOR") redirect("/vehiculos?tab=extras&error=Permiso+denegado");
+    const returnTab = String(formData.get("returnTab") ?? "extras");
+    if (actor.role === "LECTOR") redirect(`/vehiculos?tab=${encodeURIComponent(returnTab)}&error=Permiso+denegado`);
     try {
       await createVehicleExtra(Object.fromEntries(formData.entries()) as Record<string, string>, {
         id: actor.id,
         role: actor.role,
       });
       revalidatePath("/vehiculos");
-      redirect("/vehiculos?tab=extras");
+      redirect(`/vehiculos?tab=${encodeURIComponent(returnTab)}`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error al crear extra";
-      redirect(`/vehiculos?tab=extras&error=${encodeURIComponent(message)}`);
+      const message = getActionErrorMessage(error, "Error al crear elemento");
+      redirect(`/vehiculos?tab=${encodeURIComponent(returnTab)}&error=${encodeURIComponent(message)}`);
     }
   }
 
@@ -299,7 +307,8 @@ export default async function VehiculosPage({ searchParams }: Props) {
     "use server";
     const actor = await getSessionUser();
     if (!actor) redirect("/login");
-    if (actor.role === "LECTOR") redirect("/vehiculos?tab=extras&error=Permiso+denegado");
+    const returnTab = String(formData.get("returnTab") ?? "extras");
+    if (actor.role === "LECTOR") redirect(`/vehiculos?tab=${encodeURIComponent(returnTab)}&error=Permiso+denegado`);
     const extraId = String(formData.get("extraId") ?? "");
     try {
       await updateVehicleExtra(extraId, Object.fromEntries(formData.entries()) as Record<string, string>, {
@@ -307,10 +316,10 @@ export default async function VehiculosPage({ searchParams }: Props) {
         role: actor.role,
       });
       revalidatePath("/vehiculos");
-      redirect("/vehiculos?tab=extras");
+      redirect(`/vehiculos?tab=${encodeURIComponent(returnTab)}`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error al editar extra";
-      redirect(`/vehiculos?tab=extras&error=${encodeURIComponent(message)}`);
+      const message = getActionErrorMessage(error, "Error al editar elemento");
+      redirect(`/vehiculos?tab=${encodeURIComponent(returnTab)}&error=${encodeURIComponent(message)}`);
     }
   }
 
@@ -318,15 +327,16 @@ export default async function VehiculosPage({ searchParams }: Props) {
     "use server";
     const actor = await getSessionUser();
     if (!actor) redirect("/login");
-    if (actor.role === "LECTOR") redirect("/vehiculos?tab=extras&error=Permiso+denegado");
+    const returnTab = String(formData.get("returnTab") ?? "extras");
+    if (actor.role === "LECTOR") redirect(`/vehiculos?tab=${encodeURIComponent(returnTab)}&error=Permiso+denegado`);
     const extraId = String(formData.get("extraId") ?? "");
     try {
       await deleteVehicleExtra(extraId, { id: actor.id, role: actor.role });
       revalidatePath("/vehiculos");
-      redirect("/vehiculos?tab=extras");
+      redirect(`/vehiculos?tab=${encodeURIComponent(returnTab)}`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error al borrar extra";
-      redirect(`/vehiculos?tab=extras&error=${encodeURIComponent(message)}`);
+      const message = getActionErrorMessage(error, "Error al borrar elemento");
+      redirect(`/vehiculos?tab=${encodeURIComponent(returnTab)}&error=${encodeURIComponent(message)}`);
     }
   }
 
@@ -352,7 +362,7 @@ export default async function VehiculosPage({ searchParams }: Props) {
         )}`,
       );
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error importando vehículos";
+      const message = getActionErrorMessage(error, "Error importando vehículos");
       redirect(`/vehiculos?tab=altas-bajas&error=${encodeURIComponent(message)}`);
     }
   }
@@ -483,7 +493,7 @@ export default async function VehiculosPage({ searchParams }: Props) {
               <input name="summary" disabled={!canWrite} />
             </label>
             <label>
-              Precio seguro
+              CDW
               <input name="insurancePrice" type="number" step="0.01" defaultValue="0" disabled={!canWrite} />
             </label>
             <label>
@@ -502,7 +512,7 @@ export default async function VehiculosPage({ searchParams }: Props) {
           <div className="table-wrap">
             <table className="data-table">
               <thead>
-                <tr><th>Grupo</th><th>Transmisión</th><th>Descripción</th><th>Seguro</th><th>Franquicia</th><th>Fianza</th><th>Acciones</th></tr>
+                <tr><th>Grupo</th><th>Transmisión</th><th>Descripción</th><th>CDW</th><th>Franquicia</th><th>Fianza</th><th>Acciones</th></tr>
               </thead>
               <tbody>
                 {categories.length === 0 ? (
@@ -525,7 +535,7 @@ export default async function VehiculosPage({ searchParams }: Props) {
                             <label>Código<input name="code" defaultValue={category.code} /></label>
                             <label>Transmisión<select name="transmissionRequired" defaultValue={category.transmissionRequired}><option value="MANUAL">Manual</option><option value="AUTOMATICO">Automático</option></select></label>
                             <label>Descripción<input name="summary" defaultValue={category.summary} /></label>
-                            <label>Seguro<input name="insurancePrice" type="number" step="0.01" defaultValue={String(category.insurancePrice ?? 0)} /></label>
+                            <label>CDW<input name="insurancePrice" type="number" step="0.01" defaultValue={String(category.insurancePrice ?? 0)} /></label>
                             <label>Franquicia<input name="deductiblePrice" type="number" step="0.01" defaultValue={String(category.deductiblePrice ?? 0)} /></label>
                             <label>Fianza<input name="depositPrice" type="number" step="0.01" defaultValue={String(category.depositPrice ?? 0)} /></label>
                             <button className="secondary-btn" type="submit" disabled={!canWrite}>Guardar</button>
@@ -563,7 +573,13 @@ export default async function VehiculosPage({ searchParams }: Props) {
             </label>
             <label>
               Tipo de combustible
-              <input name="fuelType" disabled={!canWrite} />
+              <select name="fuelType" defaultValue="GASOLINA" disabled={!canWrite}>
+                {FUEL_OPTIONS.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
             </label>
             <label>
               Grupo al que pertenece *
@@ -610,7 +626,16 @@ export default async function VehiculosPage({ searchParams }: Props) {
                               <label>Marca<input name="brand" defaultValue={model.brand} /></label>
                               <label>Modelo<input name="model" defaultValue={model.model} /></label>
                               <label>Características<input name="features" defaultValue={model.features} /></label>
-                              <label>Combustible<input name="fuelType" defaultValue={model.fuelType} /></label>
+                              <label>
+                                Combustible
+                                <select name="fuelType" defaultValue={model.fuelType || "GASOLINA"}>
+                                  {FUEL_OPTIONS.map((option) => (
+                                    <option key={`${model.id}-${option}`} value={option}>
+                                      {option}
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
                               <label>Grupo<select name="categoryId" defaultValue={model.categoryId}>{categories.map((category) => <option key={category.id} value={category.id}>{category.code || category.name} - {category.name}</option>)}</select></label>
                               <label>Transmisión<select name="transmission" defaultValue={model.transmission}><option value="MANUAL">Manual</option><option value="AUTOMATICO">Automático</option></select></label>
                               <button className="secondary-btn" type="submit" disabled={!canWrite}>Guardar</button>
@@ -635,34 +660,19 @@ export default async function VehiculosPage({ searchParams }: Props) {
         <section className="stack-md">
           <section className="card stack-sm">
             <h3>Altas</h3>
-            <form action={createFleetAction} className="form-grid">
-              <label>Matrícula *<input name="plate" required disabled={!canWrite} /></label>
-              <label>
-                Marca / modelo *
-                <select name="modelId" required disabled={!canWrite}>
-                  <option value="">Selecciona</option>
-                  {models.map((model) => <option key={model.id} value={model.id}>{model.brand} {model.model}</option>)}
-                </select>
-              </label>
-              <label>
-                Grupo (automático por modelo)
-                <input value="Se asigna automáticamente" readOnly />
-              </label>
-              <label>Bastidor<input name="vin" disabled={!canWrite} /></label>
-              <label>Kms iniciales<input name="odometerKm" type="number" min={0} defaultValue="0" disabled={!canWrite} /></label>
-              <label>Fecha de alta *<input name="activeFrom" type="date" required disabled={!canWrite} /></label>
-              <label>Fecha límite alquiler<input name="activeUntil" type="date" disabled={!canWrite} /></label>
-              <label>
-                Propietario del coche
-                <input name="owner" disabled={!canWrite} placeholder="Proveedor" list="providers-list" />
-                <datalist id="providers-list">
-                  {providerOptions.map((provider) => <option key={provider} value={provider} />)}
-                </datalist>
-              </label>
-              <label>Precio del coche<input name="acquisitionCost" type="number" step="0.01" disabled={!canWrite} /></label>
-              <label className="col-span-2">Alertas<input name="alertNotes" disabled={!canWrite} placeholder="Notas/alertas del vehículo" /></label>
-              <div className="col-span-2"><button className="primary-btn" type="submit" disabled={!canWrite}>Dar alta</button></div>
-            </form>
+            <FleetCreateForm
+              action={createFleetAction}
+              canWrite={canWrite}
+              models={models.map((model) => {
+                const category = categories.find((item) => item.id === model.categoryId);
+                return {
+                  id: model.id,
+                  label: `${model.brand} ${model.model}`,
+                  groupLabel: category?.code || category?.name || "",
+                };
+              })}
+              providerOptions={providerOptions}
+            />
 
             <div className="table-wrap">
               <table className="data-table">
@@ -786,7 +796,7 @@ export default async function VehiculosPage({ searchParams }: Props) {
                 className="secondary-btn text-center"
                 href={`/api/reporting/vehiculos/export?type=${encodeURIComponent(listType)}&from=${encodeURIComponent(listFrom)}&to=${encodeURIComponent(listTo)}&limitDate=${encodeURIComponent(limitDate)}`}
               >
-                Exportar listado
+                Exportar PDF
               </a>
             </div>
           ) : null}
@@ -913,11 +923,83 @@ export default async function VehiculosPage({ searchParams }: Props) {
         </section>
       ) : null}
 
+      {tab === "seguros" ? (
+        <section className="card stack-sm">
+          <h3>Seguros</h3>
+          <p className="muted-text">Precio fijo o por día con máximo opcional para sumar en reservas y contratos.</p>
+          <form action={createExtraAction} className="form-grid">
+            <input type="hidden" name="kind" value="SEGURO" />
+            <input type="hidden" name="returnTab" value="seguros" />
+            <label>Código *<input name="code" required disabled={!canWrite} /></label>
+            <label>Nombre *<input name="name" required disabled={!canWrite} /></label>
+            <label>
+              Tipo de precio
+              <select name="priceMode" defaultValue="FIJO" disabled={!canWrite}>
+                <option value="FIJO">Precio fijo</option>
+                <option value="POR_DIA">Precio por día</option>
+              </select>
+            </label>
+            <label>Precio<input name="unitPrice" type="number" step="0.01" defaultValue="0" disabled={!canWrite} /></label>
+            <label>Máximo días (opcional)<input name="maxDays" type="number" min={0} defaultValue="0" disabled={!canWrite} /></label>
+            <label>
+              Activo
+              <select name="active" defaultValue="true" disabled={!canWrite}>
+                <option value="true">Sí</option>
+                <option value="false">No</option>
+              </select>
+            </label>
+            <div className="col-span-2"><button className="primary-btn" type="submit" disabled={!canWrite}>Añadir seguro</button></div>
+          </form>
+
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead><tr><th>Código</th><th>Nombre</th><th>Tipo</th><th>Precio</th><th>Máx días</th><th>Activo</th><th>Acciones</th></tr></thead>
+              <tbody>
+                {insuranceCatalog.length === 0 ? <tr><td colSpan={7} className="muted-text">Sin seguros.</td></tr> : insuranceCatalog.map((extra) => (
+                  <tr key={extra.id}>
+                    <td>{extra.code}</td>
+                    <td>{extra.name}</td>
+                    <td>{extra.priceMode === "POR_DIA" ? "Por día" : "Fijo"}</td>
+                    <td>{extra.unitPrice.toFixed(2)}</td>
+                    <td>{extra.maxDays || "N/D"}</td>
+                    <td>{extra.active ? "Sí" : "No"}</td>
+                    <td>
+                      <details>
+                        <summary>Editar / Borrar</summary>
+                        <form action={updateExtraAction} className="mini-form">
+                          <input type="hidden" name="extraId" value={extra.id} />
+                          <input type="hidden" name="kind" value="SEGURO" />
+                          <input type="hidden" name="returnTab" value="seguros" />
+                          <label>Código<input name="code" defaultValue={extra.code} /></label>
+                          <label>Nombre<input name="name" defaultValue={extra.name} /></label>
+                          <label>Tipo<select name="priceMode" defaultValue={extra.priceMode}><option value="FIJO">Fijo</option><option value="POR_DIA">Por día</option></select></label>
+                          <label>Precio<input name="unitPrice" type="number" step="0.01" defaultValue={String(extra.unitPrice)} /></label>
+                          <label>Máx días<input name="maxDays" type="number" defaultValue={String(extra.maxDays)} /></label>
+                          <label>Activo<select name="active" defaultValue={extra.active ? "true" : "false"}><option value="true">Sí</option><option value="false">No</option></select></label>
+                          <button className="secondary-btn" type="submit" disabled={!canWrite}>Guardar</button>
+                        </form>
+                        <form action={deleteExtraAction} className="mini-form">
+                          <input type="hidden" name="extraId" value={extra.id} />
+                          <input type="hidden" name="returnTab" value="seguros" />
+                          <button className="secondary-btn" type="submit" disabled={!canWrite}>Borrar</button>
+                        </form>
+                      </details>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      ) : null}
+
       {tab === "extras" ? (
         <section className="card stack-sm">
           <h3>Extras</h3>
-          <p className="muted-text">Precio fijo o por día con máximo opcional para sumar en reservas.</p>
+          <p className="muted-text">Precio fijo o por día con máximo opcional para sumar en reservas y contratos.</p>
           <form action={createExtraAction} className="form-grid">
+            <input type="hidden" name="kind" value="EXTRA" />
+            <input type="hidden" name="returnTab" value="extras" />
             <label>Código *<input name="code" required disabled={!canWrite} /></label>
             <label>Nombre *<input name="name" required disabled={!canWrite} /></label>
             <label>
@@ -943,7 +1025,7 @@ export default async function VehiculosPage({ searchParams }: Props) {
             <table className="data-table">
               <thead><tr><th>Código</th><th>Nombre</th><th>Tipo</th><th>Precio</th><th>Máx días</th><th>Activo</th><th>Acciones</th></tr></thead>
               <tbody>
-                {extras.length === 0 ? <tr><td colSpan={7} className="muted-text">Sin extras.</td></tr> : extras.map((extra) => (
+                {extrasCatalog.length === 0 ? <tr><td colSpan={7} className="muted-text">Sin extras.</td></tr> : extrasCatalog.map((extra) => (
                   <tr key={extra.id}>
                     <td>{extra.code}</td>
                     <td>{extra.name}</td>
@@ -956,6 +1038,8 @@ export default async function VehiculosPage({ searchParams }: Props) {
                         <summary>Editar / Borrar</summary>
                         <form action={updateExtraAction} className="mini-form">
                           <input type="hidden" name="extraId" value={extra.id} />
+                          <input type="hidden" name="kind" value="EXTRA" />
+                          <input type="hidden" name="returnTab" value="extras" />
                           <label>Código<input name="code" defaultValue={extra.code} /></label>
                           <label>Nombre<input name="name" defaultValue={extra.name} /></label>
                           <label>Tipo<select name="priceMode" defaultValue={extra.priceMode}><option value="FIJO">Fijo</option><option value="POR_DIA">Por día</option></select></label>
@@ -966,6 +1050,7 @@ export default async function VehiculosPage({ searchParams }: Props) {
                         </form>
                         <form action={deleteExtraAction} className="mini-form">
                           <input type="hidden" name="extraId" value={extra.id} />
+                          <input type="hidden" name="returnTab" value="extras" />
                           <button className="secondary-btn" type="submit" disabled={!canWrite}>Borrar</button>
                         </form>
                       </details>

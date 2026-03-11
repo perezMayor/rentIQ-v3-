@@ -2,6 +2,9 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { getDataDir } from "@/lib/data-dir";
 import type { Client, Contract, FleetVehicle, Invoice, RentalData, Reservation, VehicleCategory, VehicleModel } from "@/lib/domain/rental";
+import type { VehicleExtra } from "@/lib/domain/rental";
+import type { CompanyBranch } from "@/lib/domain/rental";
+import type { TariffPlan } from "@/lib/domain/rental";
 
 // Estructura inicial del almacén local cuando aún no existe fichero persistido.
 const defaultData: RentalData = {
@@ -34,10 +37,15 @@ const defaultData: RentalData = {
     contractFrontFooter: "",
     contractBackContent: "",
     contractBackContentType: "TEXT",
+    contractBackLayout: "SINGLE",
+    contractBackFontSize: 7.6,
+    contractBackContentEs: "",
+    contractBackContentEn: "",
     logoDataUrl: "",
     brandPrimaryColor: "#2563eb",
     brandSecondaryColor: "#0f172a",
     defaultIvaPercent: 21,
+    courtesyHours: 0,
     salesChannels: [],
     providers: [],
     backupRetentionDays: 90,
@@ -45,7 +53,7 @@ const defaultData: RentalData = {
     invoiceNumberScope: "BRANCH",
     branches: [],
     branchSchedules: {},
-    contractNumberPattern: "aa-sucursal-numero",
+    contractNumberPattern: "aa-id-numero",
     invoiceNumberPattern: "serie-digitos-sucursal",
     updatedAt: new Date().toISOString(),
     updatedBy: "system",
@@ -68,15 +76,22 @@ export async function readRentalData(): Promise<RentalData> {
   try {
     const raw = await readFile(filePath, "utf8");
     const parsed = JSON.parse(raw) as Partial<RentalData>;
-    const reservations = (parsed.reservations ?? []).map((reservation) => normalizeReservation(reservation as Reservation));
-    const clients = (parsed.clients ?? []).map((client) => normalizeClient(client as Client));
+    const normalizedClients = normalizeClientsWithSimpleIds(
+      (parsed.clients ?? []).map((client) => client as Client),
+      (parsed.reservations ?? []).map((reservation) => reservation as Reservation),
+    );
+    const reservations = normalizedClients.reservations.map((reservation) => normalizeReservation(reservation));
+    const clients = normalizedClients.clients.map((client) => normalizeClient(client));
     const vehicleModels = (parsed.vehicleModels ?? []).map((model) => normalizeVehicleModel(model as VehicleModel));
     const vehicleCategories = (parsed.vehicleCategories ?? []).map((category) =>
       normalizeVehicleCategory(category as VehicleCategory),
     );
+    const vehicleExtras = (parsed.vehicleExtras ?? []).map((extra) => normalizeVehicleExtra(extra as VehicleExtra));
     const fleetVehicles = (parsed.fleetVehicles ?? []).map((vehicle) => normalizeFleetVehicle(vehicle as FleetVehicle));
     const contracts = (parsed.contracts ?? []).map((contract) => normalizeContract(contract as Contract));
     const invoices = (parsed.invoices ?? []).map((invoice) => normalizeInvoice(invoice as Invoice));
+    const branches = normalizeCompanyBranches(parsed.companySettings?.branches ?? []);
+    const tariffPlans = (parsed.tariffPlans ?? []).map((plan) => normalizeTariffPlan(plan as TariffPlan));
     return {
       reservations,
       contracts,
@@ -88,9 +103,9 @@ export async function readRentalData(): Promise<RentalData> {
       vehicleModels,
       vehicleCategories,
       fleetVehicles,
-      vehicleExtras: parsed.vehicleExtras ?? [],
+      vehicleExtras,
       vehicleTasks: parsed.vehicleTasks ?? [],
-      tariffPlans: parsed.tariffPlans ?? [],
+      tariffPlans,
       tariffBrackets: parsed.tariffBrackets ?? [],
       tariffPrices: parsed.tariffPrices ?? [],
       users: parsed.users ?? [],
@@ -107,10 +122,18 @@ export async function readRentalData(): Promise<RentalData> {
         contractFrontFooter: parsed.companySettings?.contractFrontFooter ?? parsed.companySettings?.documentFooter ?? "",
         contractBackContent: parsed.companySettings?.contractBackContent ?? "",
         contractBackContentType: parsed.companySettings?.contractBackContentType === "HTML" ? "HTML" : "TEXT",
+        contractBackLayout: parsed.companySettings?.contractBackLayout === "DUAL" ? "DUAL" : "SINGLE",
+        contractBackFontSize:
+          Number.isFinite(parsed.companySettings?.contractBackFontSize) && Number(parsed.companySettings?.contractBackFontSize) > 0
+            ? Number(parsed.companySettings?.contractBackFontSize)
+            : 7.6,
+        contractBackContentEs: parsed.companySettings?.contractBackContentEs ?? "",
+        contractBackContentEn: parsed.companySettings?.contractBackContentEn ?? "",
         logoDataUrl: parsed.companySettings?.logoDataUrl ?? "",
         brandPrimaryColor: parsed.companySettings?.brandPrimaryColor ?? "#2563eb",
         brandSecondaryColor: parsed.companySettings?.brandSecondaryColor ?? "#0f172a",
         defaultIvaPercent: parsed.companySettings?.defaultIvaPercent ?? 21,
+        courtesyHours: parsed.companySettings?.courtesyHours ?? 0,
         salesChannels: parsed.companySettings?.salesChannels ?? [],
         providers: parsed.companySettings?.providers ?? [],
         backupRetentionDays: parsed.companySettings?.backupRetentionDays ?? 90,
@@ -121,9 +144,9 @@ export async function readRentalData(): Promise<RentalData> {
           A: parsed.companySettings?.invoiceSeriesByType?.A ?? "A",
         },
         invoiceNumberScope: parsed.companySettings?.invoiceNumberScope === "GLOBAL" ? "GLOBAL" : "BRANCH",
-        branches: parsed.companySettings?.branches ?? [],
+        branches,
         branchSchedules: parsed.companySettings?.branchSchedules ?? {},
-        contractNumberPattern: "aa-sucursal-numero",
+        contractNumberPattern: "aa-id-numero",
         invoiceNumberPattern:
           parsed.companySettings?.invoiceNumberPattern === "serie-digitos-global"
             ? "serie-digitos-global"
@@ -133,7 +156,7 @@ export async function readRentalData(): Promise<RentalData> {
       },
       counters: {
         reservation: parsed.counters?.reservation ?? 0,
-        client: parsed.counters?.client ?? 0,
+        client: Math.max(parsed.counters?.client ?? 0, normalizedClients.maxClientCounter),
         contractByYearBranch: parsed.counters?.contractByYearBranch ?? {},
         invoiceByYearBranch: parsed.counters?.invoiceByYearBranch ?? {},
       },
@@ -145,6 +168,49 @@ export async function readRentalData(): Promise<RentalData> {
   }
 }
 
+function normalizeTariffPlan(plan: TariffPlan): TariffPlan {
+  return {
+    ...plan,
+    courtesyHours: Number.isFinite(plan.courtesyHours) ? plan.courtesyHours : 0,
+  };
+}
+
+function normalizeClientsWithSimpleIds(clients: Client[], reservations: Reservation[]) {
+  const oldToNewId = new Map<string, string>();
+  let fallbackCounter = 0;
+
+  const normalizedClients = clients.map((client) => {
+    const trimmedCode = String(client.clientCode ?? "").trim();
+    const numericCode = /^\d+$/.test(trimmedCode) ? trimmedCode : "";
+    fallbackCounter += 1;
+    const nextSimpleId = numericCode || String(fallbackCounter);
+    const oldId = String(client.id ?? "").trim();
+    if (oldId) oldToNewId.set(oldId, nextSimpleId);
+    if (trimmedCode && trimmedCode !== nextSimpleId) oldToNewId.set(trimmedCode, nextSimpleId);
+    return {
+      ...client,
+      id: nextSimpleId,
+      clientCode: numericCode || nextSimpleId,
+    };
+  });
+
+  const normalizedReservations = reservations.map((reservation) => ({
+    ...reservation,
+    customerId: reservation.customerId ? oldToNewId.get(String(reservation.customerId).trim()) ?? String(reservation.customerId).trim() : null,
+  }));
+
+  const maxClientCounter = normalizedClients.reduce((max, client) => {
+    const numericId = Number(client.id);
+    return Number.isFinite(numericId) ? Math.max(max, numericId) : max;
+  }, 0);
+
+  return {
+    clients: normalizedClients.toSorted((a, b) => Number(a.id) - Number(b.id)),
+    reservations: normalizedReservations,
+    maxClientCounter,
+  };
+}
+
 function normalizeVehicleModel(model: VehicleModel): VehicleModel {
   return {
     ...model,
@@ -153,9 +219,67 @@ function normalizeVehicleModel(model: VehicleModel): VehicleModel {
   };
 }
 
+function normalizeCompanyBranches(branches: unknown[]): CompanyBranch[] {
+  const normalized = branches
+    .map((branch, index) => {
+      if (!branch || typeof branch !== "object") return null;
+      const item = branch as Partial<CompanyBranch> & {
+        id?: unknown;
+        code?: unknown;
+        name?: unknown;
+        contractCounterStart?: unknown;
+        address?: unknown;
+        postalCode?: unknown;
+        municipality?: unknown;
+        province?: unknown;
+        country?: unknown;
+        phone?: unknown;
+        mobile?: unknown;
+        email?: unknown;
+        active?: unknown;
+      };
+      const code = String(item.code ?? "").trim().toUpperCase();
+      const name = String(item.name ?? "").trim();
+      if (!code || !name) return null;
+      const rawId = Number(item.id);
+      const id = Number.isFinite(rawId) && rawId > 0 ? Math.floor(rawId) : index + 1;
+      const rawContractCounterStart = Number(item.contractCounterStart);
+      return {
+        id,
+        code,
+        name,
+        contractCounterStart:
+          Number.isFinite(rawContractCounterStart) && rawContractCounterStart >= 0 ? Math.floor(rawContractCounterStart) : 0,
+        address: String(item.address ?? "").trim(),
+        postalCode: String(item.postalCode ?? "").trim(),
+        municipality: String(item.municipality ?? "").trim(),
+        province: String(item.province ?? "").trim(),
+        country: String(item.country ?? "").trim(),
+        phone: String(item.phone ?? "").trim(),
+        mobile: String(item.mobile ?? "").trim(),
+        email: String(item.email ?? "").trim(),
+        active: item.active !== false,
+      };
+    })
+    .filter((branch): branch is CompanyBranch => branch !== null);
+  return normalized.toSorted((a, b) => a.id - b.id || a.code.localeCompare(b.code));
+}
+
+function normalizeVehicleExtra(extra: VehicleExtra): VehicleExtra {
+  return {
+    ...extra,
+    kind: extra.kind === "EXTRA" ? "EXTRA" : "SEGURO",
+    priceMode: extra.priceMode === "POR_DIA" ? "POR_DIA" : "FIJO",
+    unitPrice: extra.unitPrice ?? 0,
+    maxDays: extra.maxDays ?? 0,
+    active: extra.active !== false,
+  };
+}
+
 function normalizeContract(contract: Contract): Contract {
   return {
     ...contract,
+    discountBreakdown: contract.discountBreakdown ?? "",
     baseAmount: contract.baseAmount ?? 0,
     discountAmount: contract.discountAmount ?? 0,
     extrasAmount: contract.extrasAmount ?? 0,
@@ -222,6 +346,7 @@ function normalizeReservation(reservation: Reservation): Reservation {
     assignedVehicleGroup: reservation.assignedVehicleGroup ?? "",
     baseAmount: reservation.baseAmount ?? 0,
     discountAmount: reservation.discountAmount ?? 0,
+    discountBreakdown: reservation.discountBreakdown ?? "",
     extrasAmount: reservation.extrasAmount ?? 0,
     fuelAmount: reservation.fuelAmount ?? 0,
     insuranceAmount: reservation.insuranceAmount ?? 0,

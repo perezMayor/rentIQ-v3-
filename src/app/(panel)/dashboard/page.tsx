@@ -110,7 +110,7 @@ export default async function DashboardPage({ searchParams }: Props) {
   const permissionAlert =
     params.error === "permission" ? "Este usuario no tiene permiso para realizar esta acción." : null;
   const selectedBranch = await getSelectedBranchId();
-  const branchFilter = selectedBranch === "principal" ? "" : selectedBranch;
+  const branchFilter = selectedBranch.trim();
 
   const now = new Date();
   const today = now.toISOString().slice(0, 10);
@@ -395,6 +395,7 @@ export default async function DashboardPage({ searchParams }: Props) {
   const quickLinks = [
     { href: "/reservas?tab=gestion", label: "Nueva reserva" },
     { href: "/contratos?tab=gestion", label: "Nuevo contrato" },
+    { href: "/reservas?tab=presupuestos", label: "Presupuesto" },
     { href: "/reservas?tab=planning", label: "Planning" },
     { href: "/gastos", label: "Gastos" },
     ...(user.role === "LECTOR" ? [] : [{ href: "/facturacion?tab=facturas", label: "Facturación" }]),

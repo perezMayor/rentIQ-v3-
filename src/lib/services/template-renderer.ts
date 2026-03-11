@@ -61,6 +61,110 @@ export function renderTemplateWithMacros(template: string, data: Record<string, 
   });
 }
 
+export function buildBudgetTemplateData(input: {
+  language: string;
+  company: {
+    name: string;
+    taxId: string;
+    fiscalAddress: string;
+    emailFrom: string;
+    phone: string;
+    website: string;
+    footer: string;
+    logoDataUrl: string;
+    brandPrimaryColor: string;
+    brandSecondaryColor: string;
+  };
+  budget: {
+    deliveryAt: string;
+    deliveryPlace: string;
+    pickupAt: string;
+    pickupPlace: string;
+    billedCarGroup: string;
+    billedDays: number;
+    appliedRate: string;
+    baseAmount: number;
+    discountAmount: number;
+    insuranceAmount: number;
+    extrasAmount: number;
+    fuelAmount: number;
+    totalAmount: number;
+    extrasBreakdown: string;
+  };
+}) {
+  const { company, budget } = input;
+  const language = input.language.toLowerCase();
+  const extras = parseExtras(budget.extrasBreakdown || "");
+  const data: Record<string, string> = {
+    company_name: company.name,
+    company_document_name: company.name,
+    company_tax_id: company.taxId,
+    company_fiscal_address: company.fiscalAddress,
+    company_email_from: company.emailFrom,
+    company_phone: company.phone,
+    company_website: company.website,
+    company_document_footer: company.footer,
+    company_logo_data_url: company.logoDataUrl,
+    company_brand_primary_color: company.brandPrimaryColor,
+    company_brand_secondary_color: company.brandSecondaryColor,
+    delivery_at: budget.deliveryAt || "",
+    delivery_date: formatDate(budget.deliveryAt, language),
+    delivery_time: formatTime(budget.deliveryAt, language),
+    delivery_place: budget.deliveryPlace || "",
+    pickup_at: budget.pickupAt || "",
+    pickup_date: formatDate(budget.pickupAt, language),
+    pickup_time: formatTime(budget.pickupAt, language),
+    pickup_place: budget.pickupPlace || "",
+    billed_car_group: budget.billedCarGroup || "",
+    billed_days: String(budget.billedDays || 1),
+    applied_rate: budget.appliedRate || "",
+    base_amount: formatMoney(budget.baseAmount, language),
+    discount_amount: formatMoney(budget.discountAmount, language),
+    insurance_amount: formatMoney(budget.insuranceAmount, language),
+    extras_amount: formatMoney(budget.extrasAmount, language),
+    fuel_amount: formatMoney(budget.fuelAmount, language),
+    total_amount: formatMoney(budget.totalAmount, language),
+  };
+  for (let i = 1; i <= 6; i += 1) {
+    const row = extras[i - 1];
+    const key = String(i).padStart(2, "0");
+    data[`extra#${key}`] = row?.name ?? "";
+    data[`extra#${key}unit`] = row?.units ? String(row.units) : "";
+    data[`extra#${key}price`] = row ? formatMoney(row.unitPrice, language) : "";
+    data[`extra#${key}total`] = row ? formatMoney(row.total, language) : "";
+  }
+  return data;
+}
+
+export function getBudgetBaseTemplate(language: string) {
+  const isEn = language.toLowerCase().startsWith("en");
+  const title = isEn ? "Quotation" : "Presupuesto";
+  return `
+<section style="font-family:'Segoe UI',Arial,sans-serif;color:#0f172a;max-width:900px;margin:0 auto;padding:16px;">
+  <h2 style="margin:0 0 6px 0;color:#0f172a;">${title}</h2>
+  <p style="margin:0 0 12px 0;color:#475569;">{{company_document_name}}</p>
+  <div style="display:grid;gap:12px;">
+    <div style="border:1px solid #cbd5e1;border-radius:10px;padding:12px;">
+      <p><strong>${isEn ? "Delivery" : "Entrega"}:</strong> {{delivery_date}} {{delivery_time}} · {{delivery_place}}</p>
+      <p><strong>${isEn ? "Return" : "Recogida"}:</strong> {{pickup_date}} {{pickup_time}} · {{pickup_place}}</p>
+      <p><strong>${isEn ? "Tariff" : "Tarifa"}:</strong> {{applied_rate}}</p>
+      <p><strong>${isEn ? "Group" : "Grupo"}:</strong> {{billed_car_group}}</p>
+      <p><strong>${isEn ? "Billed days" : "Días facturados"}:</strong> {{billed_days}}</p>
+    </div>
+    <div style="border:1px solid #cbd5e1;border-radius:10px;padding:12px;">
+      <p><strong>${isEn ? "Rent" : "Alquiler"}:</strong> {{base_amount}}</p>
+      <p><strong>${isEn ? "Discount" : "Descuento"}:</strong> {{discount_amount}}</p>
+      <p><strong>${isEn ? "Insurance" : "Seguros"}:</strong> {{insurance_amount}}</p>
+      <p><strong>${isEn ? "Extras" : "Extras"}:</strong> {{extras_amount}}</p>
+      <p><strong>${isEn ? "Fuel" : "Combustible"}:</strong> {{fuel_amount}}</p>
+      <p><strong>${isEn ? "Total" : "Total"}:</strong> {{total_amount}}</p>
+    </div>
+  </div>
+  <div style="margin-top:12px;padding-top:10px;border-top:1px dashed #94a3b8;color:#475569;font-size:12px;">{{company_document_footer}}</div>
+</section>
+  `.trim();
+}
+
 export function buildReservationTemplateData(input: {
   language: string;
   reservation: Reservation;
@@ -116,6 +220,8 @@ export function buildReservationTemplateData(input: {
     base_amount: formatMoney(reservation.baseAmount, language),
     extras_amount: formatMoney(reservation.extrasAmount, language),
     fuel_amount: formatMoney(reservation.fuelAmount, language),
+    discount_amount: formatMoney(reservation.discountAmount, language),
+    insurance_amount: formatMoney(reservation.insuranceAmount, language),
     deductible: reservation.deductible || "N/D",
     billed_days: String(billedDays),
     observations: observations || "",

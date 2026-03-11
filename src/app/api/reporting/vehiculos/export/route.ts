@@ -1,7 +1,8 @@
 // Endpoint HTTP de reporting/vehiculos/export.
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
-import { listContracts, listFleetVehicles, listReservations } from "@/lib/services/rental-service";
+import { buildSimplePdf } from "@/lib/pdf";
+import { listContracts, listFleetVehicles, listReservations, getCompanySettings } from "@/lib/services/rental-service";
 
 type ExportType = "situacion" | "general" | "bajas" | "general_bajas" | "limite";
 
@@ -10,12 +11,12 @@ function asDate(value: string): Date | null {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
-function esc(value: string | number) {
-  const text = String(value ?? "");
-  if (text.includes(",") || text.includes("\n") || text.includes('"')) {
-    return `"${text.replace(/"/g, '""')}"`;
-  }
-  return text;
+function typeTitle(type: ExportType) {
+  if (type === "situacion") return "Situación: coches no alquilados";
+  if (type === "bajas") return "Listado de bajas";
+  if (type === "general_bajas") return "Flota actual + bajas";
+  if (type === "limite") return "Fecha límite de alquiler";
+  return "Flota actual";
 }
 
 export async function GET(request: Request) {
@@ -39,6 +40,7 @@ export async function GET(request: Request) {
   const fleet = await listFleetVehicles();
   const reservations = await listReservations("");
   const contracts = await listContracts("");
+  const settings = await getCompanySettings();
 
   const listFromIso = `${from}T00:00:00`;
   const listToIso = `${to}T23:59:59`;
@@ -77,16 +79,29 @@ export async function GET(request: Request) {
       })
       .filter((item) => item.status === "NO_ALQUILADO");
 
-    const csv = [
-      "matricula,modelo,donde_esta,ultimo_alquiler_recogida",
-      ...rows.map((row) => [esc(row.plate), esc(row.modelLabel), esc(row.location), esc(row.lastPickupAt)].join(",")),
-    ].join("\n");
+    const pdf = await buildSimplePdf({
+      title: `Vehículos · ${typeTitle(type)}`,
+      subtitle: `Rango ${from} a ${to}`,
+      companyName: settings.documentBrandName || settings.companyName,
+      companyTaxId: settings.taxId,
+      companyAddress: settings.fiscalAddress,
+      companyFooter: settings.documentFooter,
+      logoDataUrl: settings.logoDataUrl,
+      accentColor: settings.brandPrimaryColor,
+      sections: rows.map((row) => ({
+        title: `${row.plate} · ${row.modelLabel}`,
+        rows: [
+          ["Dónde está", row.location],
+          ["Última recogida", row.lastPickupAt],
+        ],
+      })),
+    });
 
-    return new NextResponse(csv, {
+    return new NextResponse(new Uint8Array(pdf), {
       status: 200,
       headers: {
-        "Content-Type": "text/csv; charset=utf-8",
-        "Content-Disposition": `attachment; filename=\"vehiculos-situacion-${from}-${to}.csv\"`,
+        "Content-Type": "application/pdf",
+        "Content-Disposition": `attachment; filename=\"vehiculos-situacion-${from}-${to}.pdf\"`,
       },
     });
   }
@@ -100,31 +115,62 @@ export async function GET(request: Request) {
       return vDate <= lDate;
     });
 
-    const csv = [
-      "matricula,modelo,grupo,limite_alquiler,estado",
-      ...rows.map((row) => [esc(row.plate), esc(row.modelLabel), esc(row.categoryLabel), esc(row.activeUntil || "N/D"), esc(row.deactivatedAt ? "BAJA" : "ALTA")].join(",")),
-    ].join("\n");
+    const pdf = await buildSimplePdf({
+      title: `Vehículos · ${typeTitle(type)}`,
+      subtitle: `Hasta ${limitDate}`,
+      companyName: settings.documentBrandName || settings.companyName,
+      companyTaxId: settings.taxId,
+      companyAddress: settings.fiscalAddress,
+      companyFooter: settings.documentFooter,
+      logoDataUrl: settings.logoDataUrl,
+      accentColor: settings.brandPrimaryColor,
+      sections: rows.map((row) => ({
+        title: `${row.plate} · ${row.modelLabel}`,
+        rows: [
+          ["Grupo", row.categoryLabel],
+          ["Límite alquiler", row.activeUntil || "N/D"],
+          ["Estado", row.deactivatedAt ? "BAJA" : "ALTA"],
+        ],
+      })),
+    });
 
-    return new NextResponse(csv, {
+    return new NextResponse(new Uint8Array(pdf), {
       status: 200,
       headers: {
-        "Content-Type": "text/csv; charset=utf-8",
-        "Content-Disposition": `attachment; filename=\"vehiculos-limite-${limitDate}.csv\"`,
+        "Content-Type": "application/pdf",
+        "Content-Disposition": `attachment; filename=\"vehiculos-limite-${limitDate}.pdf\"`,
       },
     });
   }
 
   const source = type === "bajas" ? fleetDropped : type === "general" ? fleetActive : fleet;
-  const csv = [
-    "matricula,modelo,grupo,propietario,alta,limite_alquiler,baja,motivo_baja",
-    ...source.map((row) => [esc(row.plate), esc(row.modelLabel), esc(row.categoryLabel), esc(row.owner || "N/D"), esc(row.activeFrom || "N/D"), esc(row.activeUntil || "N/D"), esc(row.deactivatedAt || "N/D"), esc(row.deactivationReason || "N/D")].join(",")),
-  ].join("\n");
+  const pdf = await buildSimplePdf({
+    title: `Vehículos · ${typeTitle(type)}`,
+    subtitle: `Rango ${from} a ${to}`,
+    companyName: settings.documentBrandName || settings.companyName,
+    companyTaxId: settings.taxId,
+    companyAddress: settings.fiscalAddress,
+    companyFooter: settings.documentFooter,
+    logoDataUrl: settings.logoDataUrl,
+    accentColor: settings.brandPrimaryColor,
+    sections: source.map((row) => ({
+      title: `${row.plate} · ${row.modelLabel}`,
+      rows: [
+        ["Grupo", row.categoryLabel],
+        ["Propietario", row.owner || "N/D"],
+        ["Alta", row.activeFrom || "N/D"],
+        ["Límite alquiler", row.activeUntil || "N/D"],
+        ["Baja", row.deactivatedAt || "N/D"],
+        ["Motivo", row.deactivationReason || "N/D"],
+      ],
+    })),
+  });
 
-  return new NextResponse(csv, {
+  return new NextResponse(new Uint8Array(pdf), {
     status: 200,
     headers: {
-      "Content-Type": "text/csv; charset=utf-8",
-      "Content-Disposition": `attachment; filename=\"vehiculos-${type}-${from}-${to}.csv\"`,
+      "Content-Type": "application/pdf",
+      "Content-Disposition": `attachment; filename=\"vehiculos-${type}-${from}-${to}.pdf\"`,
     },
   });
 }

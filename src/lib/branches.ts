@@ -1,14 +1,11 @@
-// Utilidad compartida del dominio RentIQ (branches).
-export const BRANCHES = [
-  { id: "principal", label: "Sucursal" },
-  { id: "norte", label: "Sucursal Norte" },
-  { id: "sur", label: "Sucursal Sur" },
-] as const;
+export type BranchId = string;
 
-export type BranchId = (typeof BRANCHES)[number]["id"];
+export const DEFAULT_BRANCH_ID = "";
 
-export function isBranchId(value: string): value is BranchId {
-  return BRANCHES.some((branch) => branch.id === value);
+export function normalizeBranchId(value: string): BranchId {
+  return value.trim().toUpperCase();
 }
 
-export const DEFAULT_BRANCH_ID: BranchId = "principal";
+export function isBranchId(value: string): value is BranchId {
+  return normalizeBranchId(value).length > 0;
+}

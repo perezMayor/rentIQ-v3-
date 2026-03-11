@@ -1,7 +1,9 @@
-// Endpoint HTTP de reporting/facturas/conciliacion/export.
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
-import { listContractClosureReconciliation } from "@/lib/services/rental-service";
+import { getCompanyLogoDataUrl, getCompanyPrimaryColor, getDocumentCompanyName } from "@/lib/company-brand";
+import { formatDateTimeDisplay, formatMoneyDisplay } from "@/lib/formatting";
+import { buildSimplePdf } from "@/lib/pdf";
+import { getCompanySettings, listContractClosureReconciliation } from "@/lib/services/rental-service";
 
 function safeDate(input: string | null, fallback: string) {
   const value = (input ?? "").trim();
@@ -23,28 +25,33 @@ export async function GET(request: Request) {
   const from = safeDate(url.searchParams.get("from"), fromDefault);
   const to = safeDate(url.searchParams.get("to"), today);
 
-  const rows = await listContractClosureReconciliation({ from, to });
-  const csv = [
-    ["contrato_numero", "fecha_cierre", "caja_importe", "caja_metodo", "factura_numero", "factura_total"].join(","),
-    ...rows.map((row) =>
-      [
-        row.contractNumber,
-        row.closedAt,
-        row.cashAmount.toFixed(2),
-        row.cashMethod,
-        row.invoiceNumber,
-        row.invoiceTotal.toFixed(2),
-      ]
-        .map((value) => `"${String(value).replaceAll('"', '""')}"`)
-        .join(","),
-    ),
-  ];
+  const [rows, settings] = await Promise.all([listContractClosureReconciliation({ from, to }), getCompanySettings()]);
+  const pdf = await buildSimplePdf({
+    title: "Conciliación de cierres",
+    subtitle: `Rango ${from} a ${to}`,
+    companyName: getDocumentCompanyName(settings),
+    companyTaxId: settings.taxId,
+    companyAddress: settings.fiscalAddress,
+    companyFooter: settings.documentFooter,
+    logoDataUrl: getCompanyLogoDataUrl(settings),
+    accentColor: getCompanyPrimaryColor(settings),
+    sections: rows.map((row) => ({
+      title: `${row.contractNumber} · ${row.invoiceNumber}`,
+      rows: [
+        ["Fecha cierre", formatDateTimeDisplay(row.closedAt)],
+        ["Caja", formatMoneyDisplay(row.cashAmount)],
+        ["Método", row.cashMethod],
+        ["Factura", row.invoiceNumber],
+        ["Total factura", formatMoneyDisplay(row.invoiceTotal)],
+      ],
+    })),
+  });
 
-  const filename = `conciliacion-${from}-a-${to}.csv`;
-  return new NextResponse(csv.join("\n"), {
+  const filename = `conciliacion-${from}-a-${to}.pdf`;
+  return new NextResponse(new Uint8Array(pdf), {
     status: 200,
     headers: {
-      "Content-Type": "text/csv; charset=utf-8",
+      "Content-Type": "application/pdf",
       "Content-Disposition": `attachment; filename=\"${filename}\"`,
     },
   });

@@ -1,7 +1,9 @@
-// Endpoint HTTP de reporting/contratos/export.
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
-import { listContracts } from "@/lib/services/rental-service";
+import { getCompanyLogoDataUrl, getCompanyPrimaryColor, getDocumentCompanyName } from "@/lib/company-brand";
+import { formatDateTimeDisplay, formatMoneyDisplay } from "@/lib/formatting";
+import { buildSimplePdf } from "@/lib/pdf";
+import { getCompanySettings, listContracts } from "@/lib/services/rental-service";
 
 function safeDate(input: string | null, fallback: string) {
   const value = (input ?? "").trim();
@@ -22,14 +24,6 @@ function inRange(value: string, from: string, to: string) {
   return target >= start && target <= end;
 }
 
-function esc(value: string | number) {
-  const text = String(value ?? "");
-  if (text.includes(",") || text.includes("\n") || text.includes('"')) {
-    return `"${text.replace(/"/g, '""')}"`;
-  }
-  return text;
-}
-
 export async function GET(request: Request) {
   const user = await getSessionUser();
   if (!user) {
@@ -47,7 +41,7 @@ export async function GET(request: Request) {
   const dateField = (url.searchParams.get("dateField") ?? "CREACION").trim().toUpperCase();
   const order = (url.searchParams.get("order") ?? "DESC").trim().toUpperCase();
 
-  const contracts = await listContracts("");
+  const [contracts, settings] = await Promise.all([listContracts(""), getCompanySettings()]);
   const filtered = contracts
     .filter((contract) => {
       const dateValue =
@@ -70,34 +64,37 @@ export async function GET(request: Request) {
     )
     .toSorted((a, b) => b.createdAt.localeCompare(a.createdAt));
 
-  if (order === "ASC") {
-    filtered.reverse();
-  }
+  if (order === "ASC") filtered.reverse();
 
-  const csv = [
-    "contrato,cliente,empresa,sucursal,matricula,entrega,recogida,estado,total",
-    ...filtered.map((row) =>
-      [
-        esc(row.contractNumber),
-        esc(row.customerName),
-        esc(row.companyName || "N/D"),
-        esc(row.branchCode),
-        esc(row.vehiclePlate || "N/D"),
-        esc(row.deliveryAt),
-        esc(row.pickupAt),
-        esc(row.status),
-        esc(row.totalSettlement.toFixed(2)),
-      ].join(","),
-    ),
-  ].join("\n");
+  const pdf = await buildSimplePdf({
+    title: "Listado de contratos",
+    subtitle: `Rango ${from} a ${to} | Sucursal filtro: ${branch || "Todas"}`,
+    companyName: getDocumentCompanyName(settings),
+    companyTaxId: settings.taxId,
+    companyAddress: settings.fiscalAddress,
+    companyFooter: settings.documentFooter,
+    logoDataUrl: getCompanyLogoDataUrl(settings),
+    accentColor: getCompanyPrimaryColor(settings),
+    sections: filtered.map((row) => ({
+      title: `${row.contractNumber} · ${row.customerName}`,
+      rows: [
+        ["Sucursal", row.branchCode || "N/D"],
+        ["Empresa", row.companyName || "N/D"],
+        ["Matrícula", row.vehiclePlate || "N/D"],
+        ["Entrega", formatDateTimeDisplay(row.deliveryAt)],
+        ["Recogida", formatDateTimeDisplay(row.pickupAt)],
+        ["Estado", row.status],
+        ["Total", formatMoneyDisplay(row.totalSettlement)],
+      ],
+    })),
+  });
 
-  const filename = `contratos-${from}-a-${to}.csv`;
-  return new NextResponse(csv, {
+  const filename = `contratos-${from}-a-${to}.pdf`;
+  return new NextResponse(new Uint8Array(pdf), {
     status: 200,
     headers: {
-      "Content-Type": "text/csv; charset=utf-8",
+      "Content-Type": "application/pdf",
       "Content-Disposition": `attachment; filename=\"${filename}\"`,
     },
   });
 }
-

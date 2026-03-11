@@ -2,6 +2,8 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getSessionUser } from "@/lib/auth";
+import { formatDateTimeDisplay, formatMoneyDisplay } from "@/lib/formatting";
+import { getActionErrorMessage } from "@/lib/action-errors";
 import {
   createClient,
   deactivateClient,
@@ -55,7 +57,7 @@ export default async function ClientesPage({ searchParams }: Props) {
   const q = params.q ?? "";
   const type = params.type ?? "TODOS";
   const historyClientId = params.historyClientId ?? "";
-  const canWrite = user.role !== "LECTOR";
+  const canWrite = true;
 
   const allClients = await listClients("", "TODOS");
   const filteredClients = await listClients(q, type);
@@ -78,7 +80,7 @@ export default async function ClientesPage({ searchParams }: Props) {
       revalidatePath("/clientes");
       redirect("/clientes?tab=ficha");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error al crear cliente";
+      const message = getActionErrorMessage(error, "Error al crear cliente");
       redirect(`/clientes?tab=ficha&error=${encodeURIComponent(message)}`);
     }
   }
@@ -101,7 +103,7 @@ export default async function ClientesPage({ searchParams }: Props) {
       revalidatePath("/clientes");
       redirect(`/clientes?tab=ficha&ok=${encodeURIComponent(`Importación OK: filas ${result.rows}, creados ${result.created}, reutilizados ${result.reused}`)}`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error importando clientes";
+      const message = getActionErrorMessage(error, "Error importando clientes");
       redirect(`/clientes?tab=ficha&error=${encodeURIComponent(message)}`);
     }
   }
@@ -117,7 +119,7 @@ export default async function ClientesPage({ searchParams }: Props) {
       revalidatePath("/clientes");
       redirect(`/clientes?tab=historico&historyClientId=${encodeURIComponent(clientId)}`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error al dar de baja cliente";
+      const message = getActionErrorMessage(error, "Error al dar de baja cliente");
       redirect(`/clientes?tab=historico&historyClientId=${encodeURIComponent(clientId)}&error=${encodeURIComponent(message)}`);
     }
   }
@@ -140,7 +142,7 @@ export default async function ClientesPage({ searchParams }: Props) {
       }
       redirect(`/clientes?tab=listado&q=${encodeURIComponent(q)}&type=${encodeURIComponent(type)}`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error al editar cliente";
+      const message = getActionErrorMessage(error, "Error al editar cliente");
       const tabFromForm = String(formData.get("tabContext") ?? "listado");
       if (tabFromForm === "comisiones") {
         redirect(`/clientes?tab=comisiones&error=${encodeURIComponent(message)}`);
@@ -162,7 +164,7 @@ export default async function ClientesPage({ searchParams }: Props) {
       revalidatePath("/reservas");
       redirect(`/clientes?tab=historico&historyClientId=${encodeURIComponent(clientId)}`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error al borrar reserva";
+      const message = getActionErrorMessage(error, "Error al borrar reserva");
       redirect(`/clientes?tab=historico&historyClientId=${encodeURIComponent(clientId)}&error=${encodeURIComponent(message)}`);
     }
   }
@@ -283,7 +285,7 @@ export default async function ClientesPage({ searchParams }: Props) {
                               <label>Teléfono 2<input name="phone2" defaultValue={client.phone2} /></label>
                               <label>Documento<input name="documentType" defaultValue={client.documentType} /></label>
                               <label>Nº documento<input name="documentNumber" defaultValue={client.documentNumber} /></label>
-                              <label>Carné<input name="licenseNumber" defaultValue={client.licenseNumber} /></label>
+                              <label>Permiso de conducir<input name="licenseNumber" defaultValue={client.licenseNumber} /></label>
                             <label>Idioma<input name="language" defaultValue={client.language} /></label>
                             <label>Forma pago<input name="paymentMethod" defaultValue={client.paymentMethod} /></label>
                             <label>% comisión<input name="commissionPercent" type="number" step="0.01" min="0" defaultValue={String(client.commissionPercent ?? 0)} /></label>
@@ -409,10 +411,10 @@ export default async function ClientesPage({ searchParams }: Props) {
                       historyReservations.map((reservation) => (
                         <tr key={reservation.id}>
                           <td>{reservation.reservationNumber}</td>
-                          <td>{reservation.deliveryAt}</td>
-                          <td>{reservation.pickupAt}</td>
+                          <td>{formatDateTimeDisplay(reservation.deliveryAt)}</td>
+                          <td>{formatDateTimeDisplay(reservation.pickupAt)}</td>
                           <td>{reservation.assignedPlate || "N/D"}</td>
-                          <td>{reservation.totalPrice.toFixed(2)}</td>
+                          <td>{formatMoneyDisplay(reservation.totalPrice)}</td>
                           <td>{reservation.contractId ? "CONTRATADA" : "PENDIENTE"}</td>
                           <td>
                             <div className="inline-actions-cell">

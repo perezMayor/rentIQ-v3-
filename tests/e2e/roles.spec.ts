@@ -1,19 +1,8 @@
-import { expect, test, type Page } from "@playwright/test";
-
-async function login(page: Page, input: { email: string; password: string; branch?: string }) {
-  await page.goto("/login");
-  await page.selectOption("select[name='branch']", input.branch ?? "principal");
-  await page.fill("input[name='email']", input.email);
-  await page.fill("input[name='password']", input.password);
-  await page.click("button[type='submit']");
-  await expect(page).toHaveURL(/\/dashboard/, { timeout: 30_000 });
-}
+import { expect, test } from "@playwright/test";
+import { loginAdmin, loginLector, loginSuperAdmin } from "./helpers";
 
 test("super-admin ve módulos de gestión completos", async ({ page }) => {
-  await login(page, {
-    email: "superadmin@rentiq.local",
-    password: "SuperAdmin#2026",
-  });
+  await loginSuperAdmin(page);
   const nav = page.getByRole("navigation", { name: "Navegación principal" });
 
   await expect(nav.getByRole("link", { name: "Vehículos" })).toBeVisible();
@@ -24,10 +13,7 @@ test("super-admin ve módulos de gestión completos", async ({ page }) => {
 });
 
 test("admin ve módulos operativos completos", async ({ page }) => {
-  await login(page, {
-    email: "admin@rentiq.local",
-    password: "Admin#2026",
-  });
+  await loginAdmin(page);
   const nav = page.getByRole("navigation", { name: "Navegación principal" });
 
   await expect(nav.getByRole("link", { name: "Vehículos" })).toBeVisible();
@@ -38,10 +24,7 @@ test("admin ve módulos operativos completos", async ({ page }) => {
 });
 
 test("lector no ve módulos bloqueados en menú", async ({ page }) => {
-  await login(page, {
-    email: "lector@rentiq.local",
-    password: "Lector#2026",
-  });
+  await loginLector(page);
 
   await expect(page.getByRole("link", { name: "Vehículos" })).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Clientes" })).toHaveCount(0);
@@ -49,10 +32,7 @@ test("lector no ve módulos bloqueados en menú", async ({ page }) => {
 });
 
 test("lector: accesos rápidos bloqueados muestran alerta y gastos sí abre", async ({ page }) => {
-  await login(page, {
-    email: "lector@rentiq.local",
-    password: "Lector#2026",
-  });
+  await loginLector(page);
 
   await page.getByRole("link", { name: "Nueva reserva" }).click();
   await expect(page).toHaveURL(/\/dashboard\?error=permission/);

@@ -1,28 +1,32 @@
 import { NextResponse } from "next/server";
-import { BRANCH_COOKIE, SESSION_COOKIE, validateDemoCredentials } from "@/lib/auth";
-import { DEFAULT_BRANCH_ID, isBranchId } from "@/lib/branches";
+import { BRANCH_COOKIE, SESSION_COOKIE, validateCredentials } from "@/lib/auth";
+import { DEFAULT_BRANCH_ID, normalizeBranchId } from "@/lib/branches";
 import { appendAuditEvent } from "@/lib/audit";
+import { getCompanySettings } from "@/lib/services/rental-service";
+
+export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
-  // Login demo por email con permisos derivados del usuario asociado.
   const formData = await request.formData();
-  const rawBranch = String(formData.get("branch") ?? "").trim();
+  const settings = await getCompanySettings();
+  const rawBranch = normalizeBranchId(String(formData.get("branch") ?? ""));
   const email = String(formData.get("email") ?? "").trim().toLowerCase();
   const password = String(formData.get("password") ?? "");
-  const branch = isBranchId(rawBranch) ? rawBranch : DEFAULT_BRANCH_ID;
+  const validBranches = settings.branches.map((item) => normalizeBranchId(item.code));
+  const branch = validBranches.includes(rawBranch) ? rawBranch : validBranches[0] ?? DEFAULT_BRANCH_ID;
 
   if (!email || !password) {
     const loginUrl = new URL("/login", request.url);
     loginUrl.searchParams.set("error", "missing");
-    loginUrl.searchParams.set("branch", branch);
+    if (branch) loginUrl.searchParams.set("branch", branch);
     return NextResponse.redirect(loginUrl, { status: 303 });
   }
 
-  const user = validateDemoCredentials(email, password);
+  const user = await validateCredentials(email, password);
   if (!user) {
     const loginUrl = new URL("/login", request.url);
     loginUrl.searchParams.set("error", "invalid");
-    loginUrl.searchParams.set("branch", branch);
+    if (branch) loginUrl.searchParams.set("branch", branch);
     return NextResponse.redirect(loginUrl, { status: 303 });
   }
 
@@ -38,9 +42,17 @@ export async function POST(request: Request) {
 
   // Tras POST usamos 303 para forzar navegación GET en destino.
   const response = NextResponse.redirect(new URL("/dashboard", request.url), { status: 303 });
-  // Cookie de sesión manual para evitar que el framework fuerce Secure en http local.
-  response.headers.append("Set-Cookie", `${SESSION_COOKIE}=${user.id}; Path=/; Max-Age=28800; HttpOnly; SameSite=Lax`);
-  response.headers.append("Set-Cookie", `${BRANCH_COOKIE}=${branch}; Path=/; Max-Age=28800; SameSite=Lax`);
+  response.cookies.set(SESSION_COOKIE, user.id, {
+    path: "/",
+    maxAge: 28800,
+    httpOnly: true,
+    sameSite: "lax",
+  });
+  response.cookies.set(BRANCH_COOKIE, branch || DEFAULT_BRANCH_ID, {
+    path: "/",
+    maxAge: 28800,
+    sameSite: "lax",
+  });
 
   return response;
 }

@@ -1,4 +1,5 @@
 import { appendAuditEvent, readAuditEventsByContract, readAuditEventsByReservation } from "@/lib/audit";
+import { unstable_noStore as noStore } from "next/cache";
 import { getDocumentCompanyName } from "@/lib/company-brand";
 import { sendMailFromCompany } from "@/lib/mail";
 import { getTemplatePresetHtml } from "@/lib/services/template-presets";
@@ -6,6 +7,7 @@ import { buildReservationTemplateData, getReservationBaseTemplate, renderTemplat
 import type {
   BranchScheduleConfig,
   Client,
+  CompanyBranch,
   Contract,
   FleetVehicle,
   InternalExpense,
@@ -55,12 +57,28 @@ function resolveBranchCodeFromInput(input: string, branches: Array<{ code: strin
   return normalizeBranchCode(raw);
 }
 
+function resolveBranchFromInput(input: string, branches: CompanyBranch[]): CompanyBranch | null {
+  const raw = input.trim();
+  if (!raw) return null;
+  const rawUpper = raw.toUpperCase();
+  const normalizedRaw = rawUpper.replace(/\s+/g, " ");
+  const byCode = branches.find((item) => item.code.trim().toUpperCase() === rawUpper);
+  if (byCode) return byCode;
+  const byName = branches.find((item) => item.name.trim().toUpperCase().replace(/\s+/g, " ") === normalizedRaw);
+  if (byName) return byName;
+  return null;
+}
+
 function parseNumber(input: string): number {
   const parsed = Number(input);
   if (!Number.isFinite(parsed)) {
     return 0;
   }
   return parsed;
+}
+
+function getGlobalCourtesyHours(input: { courtesyHours?: number | null }): number {
+  return Math.max(0, Number(input.courtesyHours ?? 0));
 }
 
 function formatMoney(value: number): string {
@@ -88,6 +106,10 @@ function calculateReservationTotal(input: {
 type SelectedExtraInput = {
   extraId: string;
   units: number;
+};
+
+type SelectedDiscountInput = {
+  percent: number;
 };
 
 function normalizeOwnerName(input: string): string {
@@ -221,6 +243,26 @@ function parseSelectedExtrasPayload(payloadRaw: string): SelectedExtraInput[] {
   }
 }
 
+function parseSelectedDiscountsPayload(payloadRaw: string): SelectedDiscountInput[] {
+  const raw = payloadRaw.trim();
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((item) => {
+        if (!item || typeof item !== "object") return null;
+        const candidate = item as { percent?: unknown };
+        const percentNumber = Number(candidate.percent ?? 0);
+        if (!Number.isFinite(percentNumber) || percentNumber <= 0) return null;
+        return { percent: Number(percentNumber.toFixed(2)) };
+      })
+      .filter((item): item is SelectedDiscountInput => item !== null);
+  } catch {
+    return [];
+  }
+}
+
 function calculateExtrasFromSelection(
   input: { selected: SelectedExtraInput[]; billedDays: number; fallbackAmount: number; fallbackBreakdown: string },
   extrasCatalog: VehicleExtra[],
@@ -234,20 +276,48 @@ function calculateExtrasFromSelection(
   for (const selection of input.selected) {
     const extra = extrasCatalog.find((item) => item.id === selection.extraId && item.active);
     if (!extra) continue;
-    const requestedUnits = selection.units ?? Math.max(1, input.billedDays || 1);
-    const units =
+    const requestedUnits = Math.max(1, selection.units ?? 1);
+    const chargeDays =
       extra.priceMode === "POR_DIA"
-        ? Math.min(requestedUnits, extra.maxDays > 0 ? extra.maxDays : requestedUnits)
-        : 1;
-    const amount = extra.priceMode === "POR_DIA" ? extra.unitPrice * units : extra.unitPrice;
+        ? Math.max(1, extra.maxDays > 0 ? Math.min(input.billedDays || 1, extra.maxDays) : (input.billedDays || 1))
+        : 0;
+    const amount = extra.priceMode === "POR_DIA" ? extra.unitPrice * requestedUnits * chargeDays : extra.unitPrice * requestedUnits;
     total += amount;
-    lines.push(`${extra.code}:${extra.name} x${units} (${extra.priceMode === "POR_DIA" ? "dia" : "fijo"}) = ${amount.toFixed(2)}`);
+    lines.push(
+      `${extra.code}:${extra.name} x${requestedUnits}${extra.priceMode === "POR_DIA" ? ` x${chargeDays} dias` : ""} (${extra.priceMode === "POR_DIA" ? "dia" : "fijo"}) = ${amount.toFixed(2)}`,
+    );
   }
 
   if (lines.length === 0) {
     return { amount: 0, breakdown: "" };
   }
   return { amount: Number(total.toFixed(2)), breakdown: lines.join(" | ") };
+}
+
+function calculateDiscountsFromSelection(input: {
+  selected: SelectedDiscountInput[];
+  baseAmount: number;
+  fallbackAmount: number;
+  fallbackBreakdown: string;
+}) {
+  if (input.selected.length === 0) {
+    return { amount: input.fallbackAmount, breakdown: input.fallbackBreakdown };
+  }
+
+  let total = 0;
+  const normalizedLines = input.selected.map((selection) => {
+    const amount = Number(((input.baseAmount * selection.percent) / 100).toFixed(2));
+    total += amount;
+    return {
+      percent: selection.percent,
+      amount,
+    };
+  });
+
+  return {
+    amount: Number(total.toFixed(2)),
+    breakdown: JSON.stringify(normalizedLines),
+  };
 }
 
 function ensureAssignedPlateAvailabilityForReservation(input: {
@@ -275,9 +345,9 @@ function normalizeInvoiceSeries(input: string, fallback: string): string {
   return cleaned || fallback;
 }
 
-function buildContractNumber(yearShort: string, branchCode: string, counter: number): string {
-  const branchToken = branchCode.replace(/[^A-Z0-9]/gi, "").toUpperCase() || "ND";
-  return `${yearShort}/${branchToken}/${String(counter).padStart(4, "0")}`;
+function buildContractNumber(yearShort: string, branchId: number, counter: number): string {
+  const branchToken = String(Math.max(0, Math.floor(branchId))).padStart(2, "0");
+  return `${yearShort}${branchToken}-${String(counter).padStart(4, "0")}`;
 }
 
 function buildInvoiceNumber(series: string, counter: number): string {
@@ -356,6 +426,7 @@ function contractAuditSnapshot(input: Contract) {
     branchCode: input.branchCode,
     vehiclePlate: input.vehiclePlate,
     billedCarGroup: input.billedCarGroup,
+    appliedRate: input.appliedRate,
     baseAmount: Number(input.baseAmount.toFixed(2)),
     extrasAmount: Number(input.extrasAmount.toFixed(2)),
     totalSettlement: Number(input.totalSettlement.toFixed(2)),
@@ -390,13 +461,20 @@ function dateOnlyToDayNumber(value: string): number | null {
   return Math.floor(parsed.getTime() / (24 * 60 * 60 * 1000));
 }
 
-function computeBilledDaysBy24h(deliveryAt: string, pickupAt: string): number {
+function computeBilledDaysBy24h(deliveryAt: string, pickupAt: string, courtesyHours = 0): number {
   const delivery = parseDateSafe(deliveryAt);
   const pickup = parseDateSafe(pickupAt);
   if (!delivery || !pickup) return 1;
   const diffMs = pickup.getTime() - delivery.getTime();
   if (diffMs <= 0) return 1;
-  return Math.max(1, Math.ceil(diffMs / (24 * 60 * 60 * 1000)));
+  const dayMs = 24 * 60 * 60 * 1000;
+  const courtesyMs = Math.max(0, courtesyHours) * 60 * 60 * 1000;
+  const fullDays = Math.floor(diffMs / dayMs);
+  const remainder = diffMs - fullDays * dayMs;
+  if (remainder <= 0) {
+    return Math.max(1, fullDays);
+  }
+  return Math.max(1, fullDays + (remainder > courtesyMs ? 1 : 0));
 }
 
 type TariffComputationResult = {
@@ -404,7 +482,11 @@ type TariffComputationResult = {
   amount: number;
   bracketLabel: string;
   usedPlanId: string;
+  isSeasonSplit: boolean;
 };
+
+const SPECIAL_RATE_CODE_SEASON_CROSS = "TXT";
+const SPECIAL_RATE_CODE_MANUAL = "MAN";
 
 function resolveTariffAmountForPlanDays(input: {
   data: RentalData;
@@ -418,7 +500,7 @@ function resolveTariffAmountForPlanDays(input: {
     .filter((item) => item.tariffPlanId === input.planId)
     .toSorted((a, b) => a.order - b.order);
   if (brackets.length === 0) {
-    return { found: false, amount: 0, bracketLabel: "", usedPlanId: input.planId };
+    return { found: false, amount: 0, bracketLabel: "", usedPlanId: input.planId, isSeasonSplit: false };
   }
 
   const exact = brackets.find((item) => days >= item.fromDay && days <= item.toDay);
@@ -430,7 +512,7 @@ function resolveTariffAmountForPlanDays(input: {
         item.groupCode.toUpperCase() === groupCode,
     );
     if (priceRow) {
-      return { found: true, amount: Number(priceRow.price.toFixed(2)), bracketLabel: exact.label, usedPlanId: input.planId };
+      return { found: true, amount: Number(priceRow.price.toFixed(2)), bracketLabel: exact.label, usedPlanId: input.planId, isSeasonSplit: false };
     }
   }
 
@@ -438,7 +520,7 @@ function resolveTariffAmountForPlanDays(input: {
     .filter((item) => item.toDay < days)
     .toSorted((a, b) => b.toDay - a.toDay)[0];
   if (!lower) {
-    return { found: false, amount: 0, bracketLabel: "", usedPlanId: input.planId };
+    return { found: false, amount: 0, bracketLabel: "", usedPlanId: input.planId, isSeasonSplit: false };
   }
   const lowerPrice = input.data.tariffPrices.find(
     (item) =>
@@ -447,7 +529,7 @@ function resolveTariffAmountForPlanDays(input: {
       item.groupCode.toUpperCase() === groupCode,
   );
   if (!lowerPrice || lower.toDay <= 0) {
-    return { found: false, amount: 0, bracketLabel: "", usedPlanId: input.planId };
+    return { found: false, amount: 0, bracketLabel: "", usedPlanId: input.planId, isSeasonSplit: false };
   }
   const perDay = lowerPrice.price / lower.toDay;
   return {
@@ -455,6 +537,7 @@ function resolveTariffAmountForPlanDays(input: {
     amount: Number((perDay * days).toFixed(2)),
     bracketLabel: `${lower.label} prorrateado`,
     usedPlanId: input.planId,
+    isSeasonSplit: false,
   };
 }
 
@@ -492,17 +575,18 @@ function calculateTariffAmountFromPlans(input: {
   deliveryAt?: string;
   pickupAt?: string;
   preferredPlanId?: string;
+  courtesyHours?: number;
 }): TariffComputationResult {
   const days = Math.max(1, Math.floor(input.billedDays));
   if (input.plans.length === 0) {
-    return { found: false, amount: 0, bracketLabel: "", usedPlanId: "" };
+    return { found: false, amount: 0, bracketLabel: "", usedPlanId: "", isSeasonSplit: false };
   }
 
   const fallbackPlan =
     (input.preferredPlanId ? input.plans.find((plan) => plan.id === input.preferredPlanId) : null) ??
     input.plans.toSorted((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
   if (!fallbackPlan) {
-    return { found: false, amount: 0, bracketLabel: "", usedPlanId: "" };
+    return { found: false, amount: 0, bracketLabel: "", usedPlanId: "", isSeasonSplit: false };
   }
 
   const start = input.deliveryAt ? parseDateSafe(input.deliveryAt) : null;
@@ -518,7 +602,11 @@ function calculateTariffAmountFromPlans(input: {
     });
   }
 
-  const countedDays = computeBilledDaysBy24h(input.deliveryAt ?? "", input.pickupAt ?? "");
+  const countedDays = computeBilledDaysBy24h(
+    input.deliveryAt ?? "",
+    input.pickupAt ?? "",
+    Math.max(0, Number(input.courtesyHours ?? 0)),
+  );
   const blocks = Math.max(days, countedDays);
   const planDays = new Map<string, number>();
   const ms24h = 24 * 60 * 60 * 1000;
@@ -554,7 +642,7 @@ function calculateTariffAmountFromPlans(input: {
       targetDays: referenceDays,
     });
     if (!base.found || referenceDays <= 0) {
-      return { found: false, amount: 0, bracketLabel: "", usedPlanId: planId };
+      return { found: false, amount: 0, bracketLabel: "", usedPlanId: planId, isSeasonSplit: false };
     }
     const prorated = Number(((base.amount / referenceDays) * segmentDays).toFixed(2));
     total += prorated;
@@ -565,6 +653,7 @@ function calculateTariffAmountFromPlans(input: {
     amount: Number(total.toFixed(2)),
     bracketLabel: labels.join(" + "),
     usedPlanId: fallbackPlan.id,
+    isSeasonSplit: true,
   };
 }
 
@@ -726,7 +815,8 @@ export async function getReservationForecast(input: { from: string; to: string }
     const key = category?.code || category?.name || "N/D";
     fleetByGroup[key] = (fleetByGroup[key] ?? 0) + 1;
   }
-  const allGroups = Array.from(new Set([...Object.keys(requiredByGroup), ...Object.keys(fleetByGroup)]));
+  const configuredGroups = data.vehicleCategories.map((item) => item.code || item.name).filter(Boolean);
+  const allGroups = Array.from(new Set([...configuredGroups, ...Object.keys(requiredByGroup), ...Object.keys(fleetByGroup)]));
   return allGroups
     .map((group) => {
       const required = requiredByGroup[group] ?? 0;
@@ -1231,6 +1321,7 @@ export async function listContractClosureReconciliation(input: { from: string; t
 
 // -------------------- Configuración empresa --------------------
 export async function getCompanySettings() {
+  noStore();
   const data = await readRentalData();
   return data.companySettings;
 }
@@ -1242,19 +1333,76 @@ export async function updateCompanySettings(input: Record<string, string>, actor
   const nowIso = new Date().toISOString();
 
   const branches = has("branchesRaw")
-    ? (input.branchesRaw ?? "")
-        .trim()
-        .split("\n")
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .map((line) => {
-          const [code, ...rest] = line.split("|");
-          return {
-            code: normalizeBranchCode(code ?? ""),
-            name: rest.join("|").trim() || "N/D",
-          };
-        })
-    : (current.branches ?? []);
+    ? (() => {
+        const raw = (input.branchesRaw ?? "").trim();
+        if (!raw) return [];
+        try {
+          const parsed = JSON.parse(raw) as unknown;
+          if (Array.isArray(parsed)) {
+            return parsed
+              .map((item, index) => {
+                if (!item || typeof item !== "object") return null;
+                const branch = item as Partial<CompanyBranch>;
+                const code = normalizeBranchCode(String(branch.code ?? ""));
+                const name = String(branch.name ?? "").trim() || "N/D";
+                if (!code || !name) return null;
+                const idValue = Number(branch.id);
+                const counterValue = Number(branch.contractCounterStart);
+                return {
+                  id: Number.isFinite(idValue) && idValue > 0 ? Math.floor(idValue) : index + 1,
+                  code,
+                  name,
+                  contractCounterStart: Number.isFinite(counterValue) && counterValue >= 0 ? Math.floor(counterValue) : 0,
+                  address: String(branch.address ?? "").trim(),
+                  postalCode: String(branch.postalCode ?? "").trim(),
+                  municipality: String(branch.municipality ?? "").trim(),
+                  province: String(branch.province ?? "").trim(),
+                  country: String(branch.country ?? "").trim(),
+                  phone: String(branch.phone ?? "").trim(),
+                  mobile: String(branch.mobile ?? "").trim(),
+                  email: String(branch.email ?? "").trim(),
+                  active: branch.active !== false,
+                };
+              })
+              .filter((branch): branch is CompanyBranch => branch !== null)
+              .toSorted((a, b) => a.id - b.id || a.code.localeCompare(b.code));
+          }
+        } catch {
+          // Compatibilidad con el formato histórico ID|CODIGO|NOMBRE|CONTADOR
+        }
+
+        return raw
+          .split("\n")
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .map((line, index) => {
+            const parts = line.split("|");
+            const hasExplicitId = parts.length >= 3;
+            const rawId = hasExplicitId ? Number(parts[0]) : index + 1;
+            const code = hasExplicitId ? parts[1] : parts[0];
+            const rest = hasExplicitId ? parts.slice(2) : parts.slice(1);
+            const rawContractCounterStart = Number(rest[rest.length - 1] ?? "0");
+            const hasContractCounterStart = hasExplicitId && rest.length >= 2 && Number.isFinite(rawContractCounterStart);
+            const nameParts = hasContractCounterStart ? rest.slice(0, -1) : rest;
+            return {
+              id: Number.isFinite(rawId) && rawId > 0 ? Math.floor(rawId) : index + 1,
+              code: normalizeBranchCode(code ?? ""),
+              name: nameParts.join("|").trim() || "N/D",
+              contractCounterStart: hasContractCounterStart && rawContractCounterStart >= 0 ? Math.floor(rawContractCounterStart) : 0,
+              address: "",
+              postalCode: "",
+              municipality: "",
+              province: "",
+              country: "",
+              phone: "",
+              mobile: "",
+              email: "",
+              active: true,
+            };
+          })
+          .toSorted((a, b) => a.id - b.id || a.code.localeCompare(b.code));
+      })()
+    : (current.branches ?? []).toSorted((a, b) => a.id - b.id || a.code.localeCompare(b.code));
   const providers = has("providersRaw")
     ? Array.from(
         new Set(
@@ -1301,6 +1449,17 @@ export async function updateCompanySettings(input: Record<string, string>, actor
     contractBackContentType: has("contractBackContentType")
       ? ((input.contractBackContentType ?? "").trim().toUpperCase() === "HTML" ? "HTML" : "TEXT")
       : (current.contractBackContentType ?? "TEXT"),
+    contractBackLayout:
+      has("contractBackLayout") && String(input.contractBackLayout ?? "").trim().toUpperCase() === "DUAL" ? "DUAL" : (current.contractBackLayout ?? "SINGLE"),
+    contractBackFontSize: has("contractBackFontSize")
+      ? Math.min(12, Math.max(5.5, parseNumber(input.contractBackFontSize ?? String(current.contractBackFontSize ?? 7.6))))
+      : Math.min(12, Math.max(5.5, parseNumber(String(current.contractBackFontSize ?? 7.6)))),
+    contractBackContentEs: has("contractBackContentEs")
+      ? (input.contractBackContentEs ?? "").trim()
+      : (current.contractBackContentEs ?? ""),
+    contractBackContentEn: has("contractBackContentEn")
+      ? (input.contractBackContentEn ?? "").trim()
+      : (current.contractBackContentEn ?? ""),
     logoDataUrl: has("logoDataUrl") ? (input.logoDataUrl ?? "").trim() : (current.logoDataUrl ?? ""),
     brandPrimaryColor: has("brandPrimaryColor")
       ? normalizeHex(input.brandPrimaryColor ?? "", "#2563eb")
@@ -1311,6 +1470,9 @@ export async function updateCompanySettings(input: Record<string, string>, actor
     defaultIvaPercent: has("defaultIvaPercent")
       ? parseNumber(input.defaultIvaPercent ?? String(current.defaultIvaPercent))
       : current.defaultIvaPercent,
+    courtesyHours: has("courtesyHours")
+      ? Math.max(0, Math.floor(parseNumber(input.courtesyHours ?? String(current.courtesyHours ?? 0))))
+      : Math.max(0, Math.floor(parseNumber(String(current.courtesyHours ?? 0)))),
     salesChannels: current.salesChannels ?? [],
     providers,
     backupRetentionDays: has("backupRetentionDays")
@@ -1326,7 +1488,7 @@ export async function updateCompanySettings(input: Record<string, string>, actor
       has("invoiceNumberScope") && String(input.invoiceNumberScope ?? "").toUpperCase() === "GLOBAL" ? "GLOBAL" : "BRANCH",
     branches,
     branchSchedules,
-    contractNumberPattern: "aa-sucursal-numero",
+    contractNumberPattern: "aa-id-numero",
     invoiceNumberPattern:
       has("invoiceNumberScope") && String(input.invoiceNumberScope ?? "").toUpperCase() === "GLOBAL"
         ? "serie-digitos-global"
@@ -1467,6 +1629,60 @@ export async function setUserAccountActive(userId: string, active: boolean, acto
   });
 }
 
+export async function changeOwnUserPassword(
+  userId: string,
+  input: { currentPassword: string; nextPassword: string; confirmPassword: string },
+  actor: { id: string; role: RoleName },
+) {
+  const data = await readRentalData();
+  const user = data.users.find((item) => item.id === userId && item.active);
+  if (!user) throw new Error("Usuario no encontrado");
+
+  const currentPassword = input.currentPassword.trim();
+  const nextPassword = input.nextPassword.trim();
+  const confirmPassword = input.confirmPassword.trim();
+
+  if (!currentPassword) throw new Error("Debes indicar la contraseña actual");
+  if (user.password !== currentPassword) throw new Error("La contraseña actual no es correcta");
+  if (!nextPassword) throw new Error("Debes indicar una nueva contraseña");
+  if (nextPassword.length < 8) throw new Error("La nueva contraseña debe tener al menos 8 caracteres");
+  if (nextPassword !== confirmPassword) throw new Error("La confirmación de contraseña no coincide");
+
+  user.password = nextPassword;
+  user.updatedAt = new Date().toISOString();
+  user.updatedBy = actor.id;
+  await writeRentalData(data);
+  await appendAuditEvent({
+    timestamp: user.updatedAt,
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "user_account_password",
+    entityId: user.id,
+    details: { mode: "CHANGE_SELF" },
+  });
+}
+
+export async function requestUserPasswordRecovery(emailInput: string) {
+  const data = await readRentalData();
+  const email = normalizeUserEmail(emailInput);
+  if (!email) return;
+  const user = data.users.find((item) => item.active && normalizeUserEmail(item.email) === email);
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: user?.id ?? "anonymous",
+    actorRole: user?.role ?? "LECTOR",
+    entity: "user_account_password",
+    entityId: user?.id ?? email,
+    details: {
+      mode: "RECOVERY_REQUEST",
+      email,
+      found: Boolean(user),
+    },
+  });
+}
+
 export async function deleteUserAccount(userId: string, actor: { id: string; role: RoleName }) {
   const data = await readRentalData();
   const user = data.users.find((item) => item.id === userId);
@@ -1488,13 +1704,17 @@ export async function deleteUserAccount(userId: string, actor: { id: string; rol
 export async function createReservation(input: Record<string, string>, actor: { id: string; role: RoleName }) {
   const data = await readRentalData();
   const inputCustomerId = (input.customerId ?? "").trim();
-  const client = inputCustomerId ? data.clients.find((item) => item.id === inputCustomerId) ?? null : null;
+  const client = inputCustomerId
+    ? data.clients.find((item) => item.id === inputCustomerId || item.clientCode.trim().toUpperCase() === inputCustomerId.toUpperCase()) ?? null
+    : null;
   const billedCarGroup = input.billedCarGroup?.trim() ?? "";
-  const appliedRate = (input.appliedRate ?? "").trim();
-  const billedDays = parseNumber(input.billedDays ?? "0");
+  const appliedRate = (input.appliedRate ?? "").trim().toUpperCase();
+  const plansByCode = appliedRate ? data.tariffPlans.filter((item) => item.code.toUpperCase() === appliedRate.toUpperCase()) : [];
+  const courtesyHours = getGlobalCourtesyHours(data.companySettings);
+  const billedDays = computeBilledDaysBy24h(input.deliveryAt?.trim() ?? "", input.pickupAt?.trim() ?? "", courtesyHours);
   let baseAmount = parseNumber(input.baseAmount ?? "0");
+  let computedTariff: TariffComputationResult | null = null;
   if (baseAmount <= 0 && appliedRate && billedCarGroup && billedDays > 0) {
-    const plansByCode = data.tariffPlans.filter((item) => item.code.toUpperCase() === appliedRate.toUpperCase());
     const computed = calculateTariffAmountFromPlans({
       data,
       plans: plansByCode,
@@ -1502,13 +1722,29 @@ export async function createReservation(input: Record<string, string>, actor: { 
       billedDays,
       deliveryAt: input.deliveryAt?.trim() ?? "",
       pickupAt: input.pickupAt?.trim() ?? "",
+      courtesyHours,
     });
     if (computed.found) {
       baseAmount = computed.amount;
+      computedTariff = computed;
     }
   }
-  const discountAmount = parseNumber(input.discountAmount ?? "0");
+  const resolvedAppliedRate =
+    appliedRate === SPECIAL_RATE_CODE_MANUAL
+      ? SPECIAL_RATE_CODE_MANUAL
+      : computedTariff?.isSeasonSplit
+        ? SPECIAL_RATE_CODE_SEASON_CROSS
+        : appliedRate;
+  const selectedDiscountsPayload = parseSelectedDiscountsPayload(String(input.selectedDiscountsPayload ?? ""));
   const selectedExtrasPayload = parseSelectedExtrasPayload(String(input.selectedExtrasPayload ?? ""));
+  const selectedInsurancePayload = parseSelectedExtrasPayload(String(input.selectedInsurancePayload ?? ""));
+  const computedDiscount = calculateDiscountsFromSelection({
+    selected: selectedDiscountsPayload,
+    baseAmount,
+    fallbackAmount: parseNumber(input.discountAmount ?? "0"),
+    fallbackBreakdown: input.discountBreakdown?.trim() ?? "",
+  });
+  const discountAmount = computedDiscount.amount;
   const computedExtras = calculateExtrasFromSelection(
     {
       selected: selectedExtrasPayload,
@@ -1516,11 +1752,20 @@ export async function createReservation(input: Record<string, string>, actor: { 
       fallbackAmount: parseNumber(input.extrasAmount ?? "0"),
       fallbackBreakdown: input.extrasBreakdown?.trim() ?? "",
     },
-    data.vehicleExtras,
+    data.vehicleExtras.filter((item) => item.kind === "EXTRA"),
   );
   const extrasAmount = computedExtras.amount;
   const fuelAmount = parseNumber(input.fuelAmount ?? "0");
-  const insuranceAmount = parseNumber(input.insuranceAmount ?? "0");
+  const computedInsurance = calculateExtrasFromSelection(
+    {
+      selected: selectedInsurancePayload,
+      billedDays,
+      fallbackAmount: parseNumber(input.insuranceAmount ?? "0"),
+      fallbackBreakdown: "",
+    },
+    data.vehicleExtras.filter((item) => item.kind === "SEGURO"),
+  );
+  const insuranceAmount = computedInsurance.amount;
   const penaltiesAmount = parseNumber(input.penaltiesAmount ?? "0");
   const calculatedTotal = calculateReservationTotal({
     baseAmount,
@@ -1538,8 +1783,8 @@ export async function createReservation(input: Record<string, string>, actor: { 
     `descuento:${formatMoney(discountAmount)}`,
     `extras:${formatMoney(extrasAmount)}`,
     `combustible:${formatMoney(fuelAmount)}`,
-    `seguro:${formatMoney(insuranceAmount)}`,
-    `penal:${formatMoney(penaltiesAmount)}`,
+    `cdw:${formatMoney(insuranceAmount)}`,
+    `extension:${formatMoney(penaltiesAmount)}`,
     `total:${formatMoney(totalPrice)}`,
   ].join(", ");
 
@@ -1582,6 +1827,7 @@ export async function createReservation(input: Record<string, string>, actor: { 
     assignedVehicleGroup: (input.assignedVehicleGroup ?? "").trim(),
     priceBreakdown,
     extrasBreakdown: computedExtras.breakdown,
+    discountBreakdown: computedDiscount.breakdown,
     baseAmount,
     discountAmount,
     extrasAmount,
@@ -1590,7 +1836,7 @@ export async function createReservation(input: Record<string, string>, actor: { 
     penaltiesAmount,
     fuelPolicy: input.fuelPolicy?.trim() ?? "",
     additionalDrivers: input.additionalDrivers?.trim() ?? "",
-    appliedRate,
+    appliedRate: resolvedAppliedRate,
     publicNotes: input.publicNotes?.trim() ?? "",
     privateNotes: input.privateNotes?.trim() ?? "",
     deductible: input.deductible?.trim() ?? "",
@@ -1620,10 +1866,7 @@ export async function createReservation(input: Record<string, string>, actor: { 
     throw new Error("Faltan campos obligatorios de reserva");
   }
   if (!reservation.billedDays) {
-    const dStart = parseDateSafe(reservation.deliveryAt);
-    const dEnd = parseDateSafe(reservation.pickupAt);
-    const ms = 1000 * 60 * 60 * 24;
-    reservation.billedDays = dStart && dEnd ? Math.max(1, Math.ceil((dEnd.getTime() - dStart.getTime()) / ms)) : 1;
+    reservation.billedDays = computeBilledDaysBy24h(reservation.deliveryAt, reservation.pickupAt, courtesyHours);
   }
 
   if (!reservation.assignedPlate && reservation.billedCarGroup && reservation.deliveryAt && reservation.pickupAt) {
@@ -1677,6 +1920,19 @@ export async function createReservation(input: Record<string, string>, actor: { 
     }
   }
 
+  data.reservations.push(reservation);
+  await writeRentalData(data);
+
+  await appendAuditEvent({
+    timestamp: new Date().toISOString(),
+    action: "SYSTEM",
+    actorId: actor.id,
+    actorRole: actor.role,
+    entity: "reservation",
+    entityId: reservation.id,
+    details: { reservationNumber, branchCode },
+  });
+
   if (reservation.reservationStatus === "CONFIRMADA") {
     const toEmail = (client?.email ?? "").trim();
     if (!toEmail) {
@@ -1694,7 +1950,7 @@ export async function createReservation(input: Record<string, string>, actor: { 
           failureReason: "Cliente sin email",
         },
       });
-      throw new Error("Reserva confirmada requiere email de cliente");
+      return;
     }
     const mailFrom = data.companySettings.companyEmailFrom !== "N/D" ? data.companySettings.companyEmailFrom : undefined;
     const templateHtml = resolveReservationConfirmationTemplateHtml(data.templates, client?.language || "es");
@@ -1725,6 +1981,7 @@ export async function createReservation(input: Record<string, string>, actor: { 
         to: toEmail,
         status: "ENVIADA",
       });
+      await writeRentalData(data);
     } catch (error) {
       await appendAuditEvent({
         timestamp: new Date().toISOString(),
@@ -1741,22 +1998,9 @@ export async function createReservation(input: Record<string, string>, actor: { 
           failureReason: error instanceof Error ? error.message : "Fallo SMTP",
         },
       });
-      throw error;
+      return;
     }
   }
-
-  data.reservations.push(reservation);
-  await writeRentalData(data);
-
-  await appendAuditEvent({
-    timestamp: new Date().toISOString(),
-    action: "SYSTEM",
-    actorId: actor.id,
-    actorRole: actor.role,
-    entity: "reservation",
-    entityId: reservation.id,
-    details: { reservationNumber, branchCode },
-  });
 
   if (reservation.reservationStatus === "CONFIRMADA" && reservation.confirmationSentLog.length > 0) {
     await appendAuditEvent({
@@ -1791,11 +2035,23 @@ export async function updateReservation(
   reservation.pickupPlace = (input.pickupPlace ?? reservation.pickupPlace).trim();
   reservation.pickupAt = (input.pickupAt ?? reservation.pickupAt).trim();
   reservation.billedCarGroup = (input.billedCarGroup ?? reservation.billedCarGroup).trim();
+  reservation.appliedRate = (input.appliedRate ?? reservation.appliedRate).trim().toUpperCase();
+  const courtesyHours = getGlobalCourtesyHours(data.companySettings);
+  reservation.billedDays = computeBilledDaysBy24h(
+    reservation.deliveryAt,
+    reservation.pickupAt,
+    courtesyHours,
+  );
   reservation.assignedPlate = (input.assignedPlate ?? reservation.assignedPlate).trim().toUpperCase();
+  reservation.assignedVehicleGroup = (input.assignedVehicleGroup ?? reservation.assignedVehicleGroup).trim();
+  if (Object.prototype.hasOwnProperty.call(input, "blockPlateForReservation")) {
+    reservation.blockPlateForReservation = input.blockPlateForReservation === "true";
+  }
   reservation.publicNotes = (input.publicNotes ?? reservation.publicNotes).trim();
   reservation.privateNotes = (input.privateNotes ?? reservation.privateNotes).trim();
   reservation.reservationStatus = input.reservationStatus === "PETICION" ? "PETICION" : "CONFIRMADA";
   const selectedExtrasPayload = parseSelectedExtrasPayload(String(input.selectedExtrasPayload ?? ""));
+  const selectedInsurancePayload = parseSelectedExtrasPayload(String(input.selectedInsurancePayload ?? ""));
   const computedExtras = calculateExtrasFromSelection(
     {
       selected: selectedExtrasPayload,
@@ -1803,14 +2059,49 @@ export async function updateReservation(
       fallbackAmount: parseNumber(input.extrasAmount ?? String(reservation.extrasAmount)),
       fallbackBreakdown: (input.extrasBreakdown ?? reservation.extrasBreakdown).trim(),
     },
-    data.vehicleExtras,
+    data.vehicleExtras.filter((item) => item.kind === "EXTRA"),
+  );
+  const computedInsurance = calculateExtrasFromSelection(
+    {
+      selected: selectedInsurancePayload,
+      billedDays: reservation.billedDays || 1,
+      fallbackAmount: parseNumber(input.insuranceAmount ?? String(reservation.insuranceAmount)),
+      fallbackBreakdown: "",
+    },
+    data.vehicleExtras.filter((item) => item.kind === "SEGURO"),
   );
   reservation.extrasAmount = computedExtras.amount;
   reservation.extrasBreakdown = computedExtras.breakdown;
   reservation.baseAmount = input.baseAmount ? parseNumber(input.baseAmount) : reservation.baseAmount;
-  reservation.discountAmount = input.discountAmount ? parseNumber(input.discountAmount) : reservation.discountAmount;
+  if (reservation.appliedRate !== SPECIAL_RATE_CODE_MANUAL) {
+    const plansByCode = reservation.appliedRate
+      ? data.tariffPlans.filter((item) => item.code.toUpperCase() === reservation.appliedRate.toUpperCase())
+      : [];
+    if (plansByCode.length > 0 && reservation.billedCarGroup && reservation.billedDays > 0) {
+      const computedTariff = calculateTariffAmountFromPlans({
+        data,
+        plans: plansByCode,
+        groupCode: reservation.billedCarGroup,
+        billedDays: reservation.billedDays,
+        deliveryAt: reservation.deliveryAt,
+        pickupAt: reservation.pickupAt,
+        courtesyHours,
+      });
+      if (computedTariff.found) {
+        reservation.appliedRate = computedTariff.isSeasonSplit ? SPECIAL_RATE_CODE_SEASON_CROSS : reservation.appliedRate;
+      }
+    }
+  }
+  const computedDiscount = calculateDiscountsFromSelection({
+    selected: parseSelectedDiscountsPayload(String(input.selectedDiscountsPayload ?? "")),
+    baseAmount: reservation.baseAmount,
+    fallbackAmount: input.discountAmount ? parseNumber(input.discountAmount) : reservation.discountAmount,
+    fallbackBreakdown: (input.discountBreakdown ?? reservation.discountBreakdown).trim(),
+  });
+  reservation.discountAmount = computedDiscount.amount;
+  reservation.discountBreakdown = computedDiscount.breakdown;
   reservation.fuelAmount = input.fuelAmount ? parseNumber(input.fuelAmount) : reservation.fuelAmount;
-  reservation.insuranceAmount = input.insuranceAmount ? parseNumber(input.insuranceAmount) : reservation.insuranceAmount;
+  reservation.insuranceAmount = computedInsurance.amount;
   reservation.penaltiesAmount = input.penaltiesAmount ? parseNumber(input.penaltiesAmount) : reservation.penaltiesAmount;
   const totalCalculated = calculateReservationTotal({
     baseAmount: reservation.baseAmount,
@@ -1826,8 +2117,8 @@ export async function updateReservation(
     `descuento:${formatMoney(reservation.discountAmount)}`,
     `extras:${formatMoney(reservation.extrasAmount)}`,
     `combustible:${formatMoney(reservation.fuelAmount)}`,
-    `seguro:${formatMoney(reservation.insuranceAmount)}`,
-    `penal:${formatMoney(reservation.penaltiesAmount)}`,
+    `cdw:${formatMoney(reservation.insuranceAmount)}`,
+    `extension:${formatMoney(reservation.penaltiesAmount)}`,
     `total:${formatMoney(reservation.totalPrice)}`,
   ].join(", ");
 
@@ -2183,17 +2474,20 @@ export async function convertReservationToContract(
   }
 
   // Numeración secuencial por año+sucursal para trazabilidad contable.
-  const branch = resolveBranchCodeFromInput(reservation.branchDelivery, data.companySettings.branches);
+  const branchConfig = resolveBranchFromInput(reservation.branchDelivery, data.companySettings.branches);
+  const branch = branchConfig?.code ?? resolveBranchCodeFromInput(reservation.branchDelivery, data.companySettings.branches);
+  const branchId = branchConfig?.id ?? 0;
+  const branchCounterStart = Math.max(0, branchConfig?.contractCounterStart ?? 0);
   const year = getYear(reservation.deliveryAt);
   const yearShort = getYearShort(reservation.deliveryAt);
-  const key = `${year}-${branch}`;
-  const currentCounter = data.counters.contractByYearBranch[key] ?? 0;
-  const nextCounter = currentCounter + 1;
+  const key = `${year}-${branchId}`;
+  const currentCounter = data.counters.contractByYearBranch[key] ?? branchCounterStart;
+  const nextCounter = Math.max(currentCounter, branchCounterStart) + 1;
   data.counters.contractByYearBranch[key] = nextCounter;
 
   const contract: Contract = {
     id: crypto.randomUUID(),
-    contractNumber: buildContractNumber(yearShort, branch, nextCounter),
+    contractNumber: buildContractNumber(yearShort, branchId, nextCounter),
     reservationId: reservation.id,
     branchCode: branch,
     customerName: reservation.customerName,
@@ -2202,9 +2496,11 @@ export async function convertReservationToContract(
     pickupAt: reservation.pickupAt,
     vehiclePlate: reservation.assignedPlate,
     billedCarGroup: reservation.billedCarGroup,
+    appliedRate: reservation.appliedRate,
     status: "ABIERTO",
     priceBreakdown: reservation.priceBreakdown,
     extrasBreakdown: reservation.extrasBreakdown,
+    discountBreakdown: reservation.discountBreakdown,
     baseAmount: reservation.baseAmount,
     discountAmount: reservation.discountAmount,
     extrasAmount: reservation.extrasAmount,
@@ -2340,18 +2636,20 @@ export async function renumberContract(
   }
   const before = contractAuditSnapshot(contract);
 
-  const nextBranch = resolveBranchCodeFromInput(input.branchCode ?? "", data.companySettings.branches);
+  const nextBranchConfig = resolveBranchFromInput(input.branchCode ?? "", data.companySettings.branches);
+  const nextBranch = nextBranchConfig?.code ?? resolveBranchCodeFromInput(input.branchCode ?? "", data.companySettings.branches);
   if (!nextBranch || nextBranch === "SUC-ND") {
     throw new Error("Sucursal destino obligatoria");
   }
   const year = getYear(contract.deliveryAt);
   const yearShort = getYearShort(contract.deliveryAt);
-  const key = `${year}-${nextBranch}`;
-  let counter = (data.counters.contractByYearBranch[key] ?? 0) + 1;
-  let candidate = buildContractNumber(yearShort, nextBranch, counter);
+  const key = `${year}-${nextBranchConfig?.id ?? 0}`;
+  const branchCounterStart = Math.max(0, nextBranchConfig?.contractCounterStart ?? 0);
+  let counter = Math.max(data.counters.contractByYearBranch[key] ?? branchCounterStart, branchCounterStart) + 1;
+  let candidate = buildContractNumber(yearShort, nextBranchConfig?.id ?? 0, counter);
   while (data.contracts.some((item) => item.id !== contract.id && item.contractNumber === candidate)) {
     counter += 1;
-    candidate = buildContractNumber(yearShort, nextBranch, counter);
+    candidate = buildContractNumber(yearShort, nextBranchConfig?.id ?? 0, counter);
   }
   data.counters.contractByYearBranch[key] = counter;
 
@@ -2400,6 +2698,8 @@ function ensureReservationBaseTemplates(data: RentalData) {
   const definitions = [
     { code: "CONF_RES_ES_BASE", language: "es", title: "Confirmación reserva base ES", templateType: "CONFIRMACION_RESERVA" },
     { code: "CONF_RES_EN_BASE", language: "en", title: "Reservation confirmation base EN", templateType: "CONFIRMACION_RESERVA" },
+    { code: "PRES_BASE_ES", language: "es", title: "Presupuesto base ES", templateType: "PRESUPUESTO" },
+    { code: "PRES_BASE_EN", language: "en", title: "Quotation base EN", templateType: "PRESUPUESTO" },
     { code: "FAC_BASE_ES", language: "es", title: "Factura base ES", templateType: "FACTURA" },
     { code: "FAC_BASE_EN", language: "en", title: "Invoice base EN", templateType: "FACTURA" },
   ] as const;
@@ -2415,7 +2715,7 @@ function ensureReservationBaseTemplates(data: RentalData) {
       templateType: item.templateType,
       language: item.language,
       title: item.title,
-      htmlContent: getTemplatePresetHtml(item.templateType, item.language),
+      htmlContent: getTemplatePresetHtml(item.templateType as "CONTRATO" | "CONFIRMACION_RESERVA" | "PRESUPUESTO" | "FACTURA", item.language),
       active: item.language === "es" && item.templateType === "CONFIRMACION_RESERVA",
       createdAt: nowIso,
       createdBy: "system",
@@ -3512,9 +3812,73 @@ export async function updateContract(contractId: string, input: Record<string, s
   contract.deliveryAt = (input.deliveryAt ?? contract.deliveryAt).trim();
   contract.pickupAt = (input.pickupAt ?? contract.pickupAt).trim();
   contract.billedCarGroup = (input.billedCarGroup ?? contract.billedCarGroup).trim();
+  contract.appliedRate = (input.appliedRate ?? contract.appliedRate).trim().toUpperCase();
+  contract.vehiclePlate = (input.assignedPlate ?? contract.vehiclePlate).trim().toUpperCase();
   contract.deductible = (input.deductible ?? contract.deductible).trim();
   contract.privateNotes = (input.privateNotes ?? contract.privateNotes).trim();
-  contract.totalSettlement = input.totalSettlement ? parseNumber(input.totalSettlement) : contract.totalSettlement;
+  contract.baseAmount = input.baseAmount ? parseNumber(input.baseAmount) : contract.baseAmount;
+  const courtesyHours = getGlobalCourtesyHours(data.companySettings);
+  const billedDays = Math.max(1, computeBilledDaysBy24h(contract.deliveryAt, contract.pickupAt, courtesyHours));
+  if (contract.appliedRate !== SPECIAL_RATE_CODE_MANUAL) {
+    const plansByCode = contract.appliedRate
+      ? data.tariffPlans.filter((item) => item.code.toUpperCase() === contract.appliedRate.toUpperCase())
+      : [];
+    if (plansByCode.length > 0 && contract.billedCarGroup && billedDays > 0) {
+      const computedTariff = calculateTariffAmountFromPlans({
+        data,
+        plans: plansByCode,
+        groupCode: contract.billedCarGroup,
+        billedDays,
+        deliveryAt: contract.deliveryAt,
+        pickupAt: contract.pickupAt,
+        courtesyHours,
+      });
+      if (computedTariff.found) {
+        contract.appliedRate = computedTariff.isSeasonSplit ? SPECIAL_RATE_CODE_SEASON_CROSS : contract.appliedRate;
+      }
+    }
+  }
+  const computedExtras = calculateExtrasFromSelection(
+    {
+      selected: parseSelectedExtrasPayload(String(input.selectedExtrasPayload ?? "")),
+      billedDays,
+      fallbackAmount: input.extrasAmount ? parseNumber(input.extrasAmount) : contract.extrasAmount,
+      fallbackBreakdown: (input.extrasBreakdown ?? contract.extrasBreakdown).trim(),
+    },
+    data.vehicleExtras.filter((item) => item.kind === "EXTRA"),
+  );
+  const computedDiscount = calculateDiscountsFromSelection({
+    selected: parseSelectedDiscountsPayload(String(input.selectedDiscountsPayload ?? "")),
+    baseAmount: contract.baseAmount,
+    fallbackAmount: input.discountAmount ? parseNumber(input.discountAmount) : contract.discountAmount,
+    fallbackBreakdown: (input.discountBreakdown ?? contract.discountBreakdown).trim(),
+  });
+  contract.discountAmount = computedDiscount.amount;
+  contract.discountBreakdown = computedDiscount.breakdown;
+  contract.extrasAmount = computedExtras.amount;
+  contract.extrasBreakdown = computedExtras.breakdown;
+  contract.fuelAmount = input.fuelAmount ? parseNumber(input.fuelAmount) : contract.fuelAmount;
+  contract.insuranceAmount = input.insuranceAmount ? parseNumber(input.insuranceAmount) : contract.insuranceAmount;
+  contract.penaltiesAmount = input.penaltiesAmount ? parseNumber(input.penaltiesAmount) : contract.penaltiesAmount;
+  contract.paymentsMade = input.paymentsMade ? parseNumber(input.paymentsMade) : contract.paymentsMade;
+  const totalCalculated = calculateReservationTotal({
+    baseAmount: contract.baseAmount,
+    discountAmount: contract.discountAmount,
+    extrasAmount: contract.extrasAmount,
+    fuelAmount: contract.fuelAmount,
+    insuranceAmount: contract.insuranceAmount,
+    penaltiesAmount: contract.penaltiesAmount,
+  });
+  contract.totalSettlement = input.totalPrice ? parseNumber(input.totalPrice) : totalCalculated;
+  contract.priceBreakdown = [
+    `base:${formatMoney(contract.baseAmount)}`,
+    `descuento:${formatMoney(contract.discountAmount)}`,
+    `extras:${formatMoney(contract.extrasAmount)}`,
+    `combustible:${formatMoney(contract.fuelAmount)}`,
+    `cdw:${formatMoney(contract.insuranceAmount)}`,
+    `extension:${formatMoney(contract.penaltiesAmount)}`,
+    `total:${formatMoney(contract.totalSettlement)}`,
+  ].join(", ");
   await writeRentalData(data);
   await appendAuditEvent({
     timestamp: new Date().toISOString(),
@@ -3579,10 +3943,12 @@ export type DeliveryPickupListRow = {
   reservationNumber: string;
   hasContract: boolean;
   contractNumber: string;
+  stateLabel: "PETICION" | "CONFIRMADA" | "CONTRATADA";
   customerName: string;
   place: string;
   branch: string;
   datetime: string;
+  datetimeRaw: string;
   vehiclePlate: string;
   totalPrice: number;
   days: number;
@@ -3629,7 +3995,7 @@ export async function listPickups(input: { from: string; to: string; branch: str
       if (!branchFilter) {
         return true;
       }
-      return reservation.branchDelivery.toLowerCase().includes(branchFilter);
+      return reservation.pickupBranch.toLowerCase().includes(branchFilter);
     })
     .map((reservation) => {
       const contract = reservation.contractId
@@ -3691,8 +4057,13 @@ export async function listPlanning(input: {
     if (!hasOverlap(reservation.deliveryAt, reservation.pickupAt, periodStart, periodEnd)) {
       continue;
     }
-    if (branchFilter && !reservation.branchDelivery.toUpperCase().includes(branchFilter)) {
-      continue;
+    if (branchFilter) {
+      const branchMatch =
+        resolveBranchFromInput(reservation.branchDelivery, data.companySettings.branches)?.code ??
+        normalizeBranchCode(reservation.branchDelivery);
+      if (branchMatch !== branchFilter && !reservation.branchDelivery.toUpperCase().includes(branchFilter)) {
+        continue;
+      }
     }
     const assignedPlate = reservation.assignedPlate.toUpperCase();
     if (reservation.assignedPlate && plateFilter && !assignedPlate.includes(plateFilter)) {
@@ -3716,6 +4087,7 @@ export async function listPlanning(input: {
     if (!reservation.assignedPlate && !orphanConfirmed) {
       continue;
     }
+    const blockedAssignedPlate = Boolean(reservation.blockPlateForReservation && reservation.assignedPlate);
     planningItems.push({
       id: `reservation-${reservation.id}`,
       type: "RESERVA",
@@ -3725,7 +4097,9 @@ export async function listPlanning(input: {
       modelLabel,
       startAt: reservation.deliveryAt,
       endAt: reservation.pickupAt,
-      status: orphanConfirmed
+      status: blockedAssignedPlate
+        ? "BLOQUEADO"
+        : orphanConfirmed
         ? "RESERVA_HUERFANA"
         : hasContract
         ? "CONTRATADO"
@@ -3818,6 +4192,34 @@ export async function listPlanning(input: {
     });
   }
 
+  for (const vehicle of data.fleetVehicles) {
+    if (vehicle.deactivatedAt) continue;
+    const upperPlate = vehicle.plate.toUpperCase();
+    if (plateFilter && !upperPlate.includes(plateFilter)) continue;
+    const model = data.vehicleModels.find((item) => item.id === vehicle.modelId) ?? null;
+    const category = data.vehicleCategories.find((item) => item.id === vehicle.categoryId) ?? null;
+    const groupLabel = category?.code || category?.name || "N/D";
+    const modelLabel = model ? `${model.brand} ${model.model}` : "N/D";
+    if (groupFilter && !groupLabel.toUpperCase().includes(groupFilter)) continue;
+    if (modelFilter && !modelLabel.toUpperCase().includes(modelFilter)) continue;
+    grouped[groupLabel] = grouped[groupLabel] ?? {};
+    grouped[groupLabel][modelLabel] = grouped[groupLabel][modelLabel] ?? [];
+    const exists = grouped[groupLabel][modelLabel].some((row) => row.vehiclePlate.toUpperCase() === upperPlate);
+    if (exists) continue;
+    grouped[groupLabel][modelLabel].push({
+      vehiclePlate: upperPlate,
+      modelLabel,
+      rowType: "MATRICULA",
+      items: [],
+    });
+  }
+
+  for (const category of data.vehicleCategories) {
+    const groupLabel = category.code || category.name || "N/D";
+    if (groupFilter && !groupLabel.toUpperCase().includes(groupFilter)) continue;
+    grouped[groupLabel] = grouped[groupLabel] ?? {};
+  }
+
   return Object.entries(grouped)
     .map(([groupLabel, models]) => ({
       groupLabel,
@@ -3898,7 +4300,7 @@ export async function createClient(input: Record<string, string>, actor: { id: s
   const clientCode = String(data.counters.client);
 
   const client: Client = {
-    id: crypto.randomUUID(),
+    id: clientCode,
     clientCode,
     clientType,
     referenceCode: (input.referenceCode ?? "").trim(),
@@ -4294,7 +4696,9 @@ export async function deleteClient(clientId: string, actor: { id: string; role: 
 // -------------------- Catálogo y flota --------------------
 export async function listVehicleModels(): Promise<VehicleModel[]> {
   const data = await readRentalData();
-  return data.vehicleModels.toSorted((a, b) => a.brand.localeCompare(b.brand));
+  return data.vehicleModels.toSorted(
+    (a, b) => a.brand.localeCompare(b.brand) || a.model.localeCompare(b.model),
+  );
 }
 
 export async function createVehicleModel(input: Record<string, string>, actor: { id: string; role: RoleName }) {
@@ -4313,6 +4717,9 @@ export async function createVehicleModel(input: Record<string, string>, actor: {
 
   if (!model.brand || !model.model) {
     throw new Error("Marca y modelo son obligatorios");
+  }
+  if (data.vehicleModels.some((item) => item.brand.trim().toUpperCase() === model.brand.toUpperCase() && item.model.trim().toUpperCase() === model.model.toUpperCase())) {
+    throw new Error("Ya existe un modelo con esa marca y nombre");
   }
 
   data.vehicleModels.push(model);
@@ -4478,24 +4885,31 @@ export async function listFleetVehicles(): Promise<
         status: vehicle.deactivatedAt ? ("BAJA" as const) : ("ALTA" as const),
       };
     })
-    .toSorted((a, b) => a.plate.localeCompare(b.plate));
+    .toSorted(
+      (a, b) =>
+        a.categoryLabel.localeCompare(b.categoryLabel) ||
+        a.modelLabel.localeCompare(b.modelLabel) ||
+        a.plate.localeCompare(b.plate),
+    );
 }
 
 export async function listVehicleExtras(): Promise<VehicleExtra[]> {
   const data = await readRentalData();
-  return data.vehicleExtras.toSorted((a, b) => a.code.localeCompare(b.code));
+  return data.vehicleExtras.toSorted((a, b) => a.kind.localeCompare(b.kind) || a.code.localeCompare(b.code));
 }
 
 export async function createVehicleExtra(input: Record<string, string>, actor: { id: string; role: RoleName }) {
   const data = await readRentalData();
   const code = (input.code ?? "").trim().toUpperCase();
   const name = (input.name ?? "").trim();
+  const kind = input.kind === "EXTRA" ? "EXTRA" : "SEGURO";
   if (!code || !name) throw new Error("Código y nombre del extra son obligatorios");
   if (data.vehicleExtras.some((item) => item.code === code)) throw new Error("Ya existe un extra con ese código");
   const extra: VehicleExtra = {
     id: crypto.randomUUID(),
     code,
     name,
+    kind,
     priceMode: input.priceMode === "POR_DIA" ? "POR_DIA" : "FIJO",
     unitPrice: parseNumber(input.unitPrice ?? "0"),
     maxDays: parseNumber(input.maxDays ?? "0"),
@@ -4513,6 +4927,7 @@ export async function updateVehicleExtra(extraId: string, input: Record<string, 
   if (!extra) throw new Error("Extra no encontrado");
   extra.code = (input.code ?? extra.code).trim().toUpperCase();
   extra.name = (input.name ?? extra.name).trim();
+  extra.kind = input.kind === "EXTRA" ? "EXTRA" : "SEGURO";
   extra.priceMode = input.priceMode === "POR_DIA" ? "POR_DIA" : "FIJO";
   extra.unitPrice = parseNumber(input.unitPrice ?? String(extra.unitPrice));
   extra.maxDays = parseNumber(input.maxDays ?? String(extra.maxDays));
@@ -4949,6 +5364,7 @@ export async function createTariffPlan(input: Record<string, string>, actor: { i
     season: (input.season ?? "").trim(),
     validFrom: (input.validFrom ?? "").trim(),
     validTo: (input.validTo ?? "").trim(),
+    courtesyHours: Math.max(0, parseNumber(input.courtesyHours ?? "0")),
     priceMode:
       input.priceMode === "PRECIO_B" ? "PRECIO_B" : input.priceMode === "PRECIO_C" ? "PRECIO_C" : "PRECIO_A",
     active: input.active === "false" ? false : true,
@@ -4991,6 +5407,7 @@ export async function updateTariffPlan(
   plan.season = (input.season ?? plan.season).trim();
   plan.validFrom = (input.validFrom ?? plan.validFrom).trim();
   plan.validTo = (input.validTo ?? plan.validTo).trim();
+  plan.courtesyHours = Math.max(0, parseNumber(input.courtesyHours ?? String(plan.courtesyHours ?? 0)));
   plan.active = input.active === "false" ? false : true;
   plan.notes = (input.notes ?? plan.notes).trim();
   plan.updatedAt = new Date().toISOString();
@@ -5184,6 +5601,7 @@ export async function calculateTariffQuote(input: {
     deliveryAt: input.deliveryAt,
     pickupAt: input.pickupAt,
     preferredPlanId: targetPlan.id,
+    courtesyHours: getGlobalCourtesyHours(data.companySettings),
   });
   return {
     found: result.found,
@@ -5212,10 +5630,10 @@ export async function listTemplates(query: string) {
 export async function createTemplate(input: Record<string, string>, actor: { id: string; role: RoleName }) {
   const data = await readRentalData();
   const templateTypeRaw = (input.templateType ?? "CONTRATO").toUpperCase();
-  const templateType = (["CONTRATO", "CONFIRMACION_RESERVA", "FACTURA"] as const).includes(
-    templateTypeRaw as "CONTRATO" | "CONFIRMACION_RESERVA" | "FACTURA",
+  const templateType = (["CONTRATO", "CONFIRMACION_RESERVA", "PRESUPUESTO", "FACTURA"] as const).includes(
+    templateTypeRaw as "CONTRATO" | "CONFIRMACION_RESERVA" | "PRESUPUESTO" | "FACTURA",
   )
-    ? (templateTypeRaw as "CONTRATO" | "CONFIRMACION_RESERVA" | "FACTURA")
+    ? (templateTypeRaw as "CONTRATO" | "CONFIRMACION_RESERVA" | "PRESUPUESTO" | "FACTURA")
     : "CONTRATO";
   const templateCode = (input.templateCode ?? "").trim().toUpperCase();
   const language = (input.language ?? "").trim().toLowerCase();
@@ -5296,10 +5714,12 @@ function mapListRow(reservation: Reservation, contract: Contract | null, mode: "
     reservationNumber: reservation.reservationNumber,
     hasContract: Boolean(contract),
     contractNumber: contract?.contractNumber ?? "",
+    stateLabel: contract ? "CONTRATADA" : reservation.reservationStatus,
     customerName: reservation.customerName,
     place: mode === "DELIVERY" ? reservation.deliveryPlace : reservation.pickupPlace,
     branch: mode === "DELIVERY" ? reservation.branchDelivery : reservation.pickupBranch,
     datetime: mode === "DELIVERY" ? reservation.deliveryAt : reservation.pickupAt,
+    datetimeRaw: mode === "DELIVERY" ? reservation.deliveryAt : reservation.pickupAt,
     vehiclePlate: reservation.assignedPlate,
     totalPrice: reservation.totalPrice,
     days,
@@ -5414,7 +5834,7 @@ export async function importClientsFromCsv(csvRaw: string, actor: { id: string; 
   for (let idx = 0; idx < rows.length; idx += 1) {
     const row = rows[idx];
     const sourceDoc = getRowValue(row, ["documentNumber", "dni", "documento", "doc"]);
-    const sourceLicense = getRowValue(row, ["licenseNumber", "permiso", "carnet", "licencia"]);
+    const sourceLicense = getRowValue(row, ["licenseNumber", "permiso", "permisoConducir", "permiso_conducir", "carnet", "licencia", "driverLicense", "drivingLicense"]);
     const docKey = sourceDoc.toLowerCase();
     const licenseKey = sourceLicense.toLowerCase();
     const alreadyKnown = Boolean((docKey && seenDocument.has(docKey)) || (licenseKey && seenLicense.has(licenseKey)));
@@ -5522,6 +5942,7 @@ export async function importTariffCatalogFromCsv(csvRaw: string, actor: { id: st
         season: getRowValue(row, ["season", "temporada"]),
         validFrom: getRowValue(row, ["validFrom", "desde"]),
         validTo: getRowValue(row, ["validTo", "hasta"]),
+        courtesyHours: Math.max(0, parseNumber(getRowValue(row, ["courtesyHours", "horasCortesia", "cortesiaHoras"]) || "0")),
         priceMode:
           getRowValue(row, ["priceMode", "modoPrecio"]) === "PRECIO_B"
             ? "PRECIO_B"
@@ -5545,6 +5966,10 @@ export async function importTariffCatalogFromCsv(csvRaw: string, actor: { id: st
       plan.season = getRowValue(row, ["season", "temporada"]) || plan.season;
       plan.validFrom = getRowValue(row, ["validFrom", "desde"]) || plan.validFrom;
       plan.validTo = getRowValue(row, ["validTo", "hasta"]) || plan.validTo;
+      plan.courtesyHours = Math.max(
+        0,
+        parseNumber(getRowValue(row, ["courtesyHours", "horasCortesia", "cortesiaHoras"]) || String(plan.courtesyHours || 0)),
+      );
       plan.updatedAt = now;
       plan.updatedBy = actor.id;
     }

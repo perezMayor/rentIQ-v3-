@@ -1,6 +1,6 @@
 import PDFDocument from "pdfkit";
 import { getCompanyLogoDataUrl, getCompanyPrimaryColor, getDocumentCompanyName } from "@/lib/company-brand";
-import { ensurePdfkitFontCompat } from "@/lib/pdfkit-compat";
+import { applyPdfkitFontFallback, ensurePdfkitFontCompat } from "@/lib/pdfkit-compat";
 import type { Client, Invoice, TemplateDocument } from "@/lib/domain/rental";
 import { readRentalData } from "@/lib/services/rental-store";
 
@@ -103,6 +103,7 @@ function buildInvoicePdf(input: {
   return new Promise((resolve, reject) => {
     ensurePdfkitFontCompat();
     const doc = new PDFDocument({ size: "A4", margin: 0 });
+    applyPdfkitFontFallback(doc);
     const chunks: Buffer[] = [];
     doc.on("data", (chunk) => chunks.push(chunk as Buffer));
     doc.on("end", () => resolve(Buffer.concat(chunks)));

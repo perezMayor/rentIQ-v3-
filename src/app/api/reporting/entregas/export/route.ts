@@ -1,58 +1,45 @@
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
-import { getCompanyLogoDataUrl, getCompanyPrimaryColor, getDocumentCompanyName } from "@/lib/company-brand";
-import { buildSimplePdf } from "@/lib/pdf";
+import { getCompanyPrimaryColor } from "@/lib/company-brand";
+import { buildOperationalListPdf } from "@/lib/operational-list-pdf";
 import { getCompanySettings, listDeliveries } from "@/lib/services/rental-service";
 
+export const dynamic = "force-dynamic";
+
 export async function GET(request: Request) {
-  // Endpoint protegido: requiere sesión.
   const user = await getSessionUser();
   if (!user) {
     return NextResponse.json({ error: "No autenticado" }, { status: 401 });
   }
 
-  // Filtros de exportación (rango + sucursal opcional).
   const url = new URL(request.url);
   const from = url.searchParams.get("from") ?? new Date().toISOString().slice(0, 10);
   const to = url.searchParams.get("to") ?? new Date().toISOString().slice(0, 10);
   const branch = url.searchParams.get("branch") ?? "";
+  const status = (url.searchParams.get("status") ?? "TODOS").toUpperCase();
 
   const data = await listDeliveries({ from: `${from}T00:00:00`, to: `${to}T23:59:59`, branch });
   const settings = await getCompanySettings();
+  const rows = [...data.withContract, ...data.withoutContract].toSorted((a, b) => a.datetime.localeCompare(b.datetime));
+  const dedupedRows = rows
+    .filter((row, index, all) => all.findIndex((item) => item.reservationId === row.reservationId) === index)
+    .filter((row) => status === "TODOS" || row.stateLabel === status);
 
-  // Exporta dos bloques: con contrato y pendientes/sin matrícula.
-  const pdf = await buildSimplePdf({
-    title: "Listado Entregas",
-    subtitle: `Rango ${from} a ${to} | Sucursal filtro: ${branch || "Todas"}`,
-    companyName: getDocumentCompanyName(settings),
-    companyTaxId: settings.taxId,
-    companyAddress: settings.fiscalAddress,
-    companyFooter: settings.documentFooter,
-    logoDataUrl: getCompanyLogoDataUrl(settings),
+  const pdf = await buildOperationalListPdf({
+    title: "Entregas",
+    from,
+    to,
+    rows: dedupedRows,
     accentColor: getCompanyPrimaryColor(settings),
-    sections: [
-      {
-        title: "Con contrato generado",
-        rows: data.withContract.map((row) => [
-          row.reservationNumber,
-          `${row.datetime} | ${row.customerName} | ${row.vehiclePlate || "N/D"} | ${row.place || "N/D"}`,
-        ]),
-      },
-      {
-        title: "Sin contrato / sin matrícula",
-        rows: data.withoutContract.map((row) => [
-          row.reservationNumber,
-          `${row.datetime} | ${row.customerName} | ${row.vehiclePlate || "N/D"} | ${row.place || "N/D"}`,
-        ]),
-      },
-    ],
   });
 
-  return new NextResponse(new Uint8Array(pdf), {
+  return new Response(pdf, {
     status: 200,
     headers: {
       "Content-Type": "application/pdf",
       "Content-Disposition": `attachment; filename=\"entregas-${from}-${to}.pdf\"`,
+      "Content-Length": String(pdf.length),
+      "Cache-Control": "no-store",
     },
   });
 }

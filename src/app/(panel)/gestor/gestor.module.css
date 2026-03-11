@@ -160,7 +160,7 @@
 
 .branchForm {
   display: grid;
-  grid-template-columns: minmax(0, 180px) minmax(0, 1fr);
+  grid-template-columns: repeat(12, minmax(0, 1fr));
   gap: 0.7rem;
 }
 
@@ -170,12 +170,40 @@
   gap: 0.35rem;
 }
 
+.branchSpan2 {
+  grid-column: span 2;
+}
+
+.branchSpan3 {
+  grid-column: span 3;
+}
+
+.branchSpan4 {
+  grid-column: span 4;
+}
+
+.branchSpan5 {
+  grid-column: span 5;
+}
+
+.branchSpan6 {
+  grid-column: span 6;
+}
+
+.branchSpan8 {
+  grid-column: span 8;
+}
+
+.branchSpan12 {
+  grid-column: 1 / -1;
+}
+
 .branchFormWide {
-  grid-column: span 1;
+  grid-column: 1 / -1;
 }
 
 .branchActions {
-  grid-column: span 2;
+  grid-column: 1 / -1;
   display: flex;
   gap: 0.5rem;
   justify-content: flex-start;
@@ -192,6 +220,17 @@
 
   .branchForm {
     grid-template-columns: 1fr;
+  }
+
+  .branchSpan2,
+  .branchSpan3,
+  .branchSpan4,
+  .branchSpan5,
+  .branchSpan6,
+  .branchSpan8,
+  .branchSpan12,
+  .branchFormWide {
+    grid-column: span 1;
   }
 
   .branchActions {

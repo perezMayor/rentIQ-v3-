@@ -1,7 +1,9 @@
-// Endpoint HTTP de reporting/gastos/export.
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
-import { listDailyOperationalExpenses } from "@/lib/services/rental-service";
+import { getCompanyLogoDataUrl, getCompanyPrimaryColor, getDocumentCompanyName } from "@/lib/company-brand";
+import { formatDateDisplay, formatMoneyDisplay } from "@/lib/formatting";
+import { buildSimplePdf } from "@/lib/pdf";
+import { getCompanySettings, listDailyOperationalExpenses } from "@/lib/services/rental-service";
 
 export async function GET(request: Request) {
   const user = await getSessionUser();
@@ -15,27 +17,33 @@ export async function GET(request: Request) {
   const plate = url.searchParams.get("plate") ?? "";
   const worker = url.searchParams.get("worker") ?? "";
 
-  const report = await listDailyOperationalExpenses({ from, to, plate, worker });
-  const header = "fecha,matricula,categoria,importe,empleado,batch,nota";
-  const rows = report.rows.map((row) => {
-    const note = (row.note ?? "").replace(/[\r\n]+/g, " ").replace(/"/g, '""');
-    return [
-      row.expenseDate,
-      row.vehiclePlate,
-      row.category,
-      row.amount.toFixed(2),
-      row.workerName,
-      row.batchId,
-      `"${note}"`,
-    ].join(",");
+  const [report, settings] = await Promise.all([listDailyOperationalExpenses({ from, to, plate, worker }), getCompanySettings()]);
+  const pdf = await buildSimplePdf({
+    title: "Diario contable",
+    subtitle: `Rango ${from} a ${to}`,
+    companyName: getDocumentCompanyName(settings),
+    companyTaxId: settings.taxId,
+    companyAddress: settings.fiscalAddress,
+    companyFooter: settings.documentFooter,
+    logoDataUrl: getCompanyLogoDataUrl(settings),
+    accentColor: getCompanyPrimaryColor(settings),
+    sections: report.rows.map((row) => ({
+      title: `${formatDateDisplay(row.expenseDate)} · ${row.vehiclePlate}`,
+      rows: [
+        ["Categoría", row.category],
+        ["Importe", formatMoneyDisplay(row.amount)],
+        ["Empleado", row.workerName || "N/D"],
+        ["Batch", row.batchId || "N/D"],
+        ["Nota", row.note || "N/D"],
+      ],
+    })),
   });
-  const csv = [header, ...rows].join("\n");
 
-  return new NextResponse(csv, {
+  return new NextResponse(new Uint8Array(pdf), {
     status: 200,
     headers: {
-      "Content-Type": "text/csv; charset=utf-8",
-      "Content-Disposition": `attachment; filename=\"gastos-${from}-${to}.csv\"`,
+      "Content-Type": "application/pdf",
+      "Content-Disposition": `attachment; filename=\"gastos-${from}-${to}.pdf\"`,
     },
   });
 }

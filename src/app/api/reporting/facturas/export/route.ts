@@ -1,7 +1,9 @@
-// Endpoint HTTP de reporting/facturas/export.
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
-import { listInvoiceJournal } from "@/lib/services/rental-service";
+import { getCompanyLogoDataUrl, getCompanyPrimaryColor, getDocumentCompanyName } from "@/lib/company-brand";
+import { formatDateTimeDisplay, formatMoneyDisplay } from "@/lib/formatting";
+import { buildSimplePdf } from "@/lib/pdf";
+import { getCompanySettings, listInvoiceJournal } from "@/lib/services/rental-service";
 
 function safeDate(input: string | null, fallback: string) {
   const value = (input ?? "").trim();
@@ -24,33 +26,34 @@ export async function GET(request: Request) {
   const from = safeDate(url.searchParams.get("from"), fromDefault);
   const to = safeDate(url.searchParams.get("to"), today);
 
-  const invoices = await listInvoiceJournal({ q, from, to });
-  const rows = [
-    ["numero", "nombre", "contrato_id", "fecha", "base", "extras", "seguros", "penalizaciones", "iva_pct", "iva", "total"].join(","),
-    ...invoices.map((invoice) =>
-      [
-        invoice.invoiceNumber,
-        invoice.invoiceName,
-        invoice.contractId ?? "MANUAL",
-        invoice.issuedAt,
-        invoice.baseAmount.toFixed(2),
-        invoice.extrasAmount.toFixed(2),
-        invoice.insuranceAmount.toFixed(2),
-        invoice.penaltiesAmount.toFixed(2),
-        invoice.ivaPercent.toFixed(2),
-        invoice.ivaAmount.toFixed(2),
-        invoice.totalAmount.toFixed(2),
-      ]
-        .map((value) => `"${String(value).replaceAll('"', '""')}"`)
-        .join(","),
-    ),
-  ];
+  const [invoices, settings] = await Promise.all([listInvoiceJournal({ q, from, to }), getCompanySettings()]);
+  const pdf = await buildSimplePdf({
+    title: "Listado de facturas",
+    subtitle: `Rango ${from} a ${to}`,
+    companyName: getDocumentCompanyName(settings),
+    companyTaxId: settings.taxId,
+    companyAddress: settings.fiscalAddress,
+    companyFooter: settings.documentFooter,
+    logoDataUrl: getCompanyLogoDataUrl(settings),
+    accentColor: getCompanyPrimaryColor(settings),
+    sections: invoices.map((invoice) => ({
+      title: `${invoice.invoiceNumber} · ${invoice.invoiceName}`,
+      rows: [
+        ["Contrato", invoice.contractId ?? "MANUAL"],
+        ["Fecha", formatDateTimeDisplay(invoice.issuedAt)],
+        ["Base", formatMoneyDisplay(invoice.baseAmount)],
+        ["IVA", `${invoice.ivaPercent.toFixed(2)}% · ${formatMoneyDisplay(invoice.ivaAmount)}`],
+        ["Total", formatMoneyDisplay(invoice.totalAmount)],
+        ["Estado", invoice.status === "FINAL" ? "Final" : "Borrador"],
+      ],
+    })),
+  });
 
-  const filename = `facturas-${from}-a-${to}.csv`;
-  return new NextResponse(rows.join("\n"), {
+  const filename = `facturas-${from}-a-${to}.pdf`;
+  return new NextResponse(new Uint8Array(pdf), {
     status: 200,
     headers: {
-      "Content-Type": "text/csv; charset=utf-8",
+      "Content-Type": "application/pdf",
       "Content-Disposition": `attachment; filename=\"${filename}\"`,
     },
   });

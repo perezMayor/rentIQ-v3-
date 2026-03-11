@@ -8,7 +8,6 @@ import { useEffect, useState, useTransition } from "react";
 import { MainLayoutFrame } from "@/components/main-layout-frame";
 import { LogoutButton } from "@/components/logout-button";
 import { useTheme } from "@/components/theme-provider";
-import type { BranchId } from "@/lib/branches";
 
 type AppNavItem = {
   href: string;
@@ -18,8 +17,8 @@ type AppNavItem = {
 type Props = {
   userName: string;
   userRole: string;
-  branches: ReadonlyArray<{ id: BranchId; label: string }>;
-  selectedBranch: BranchId;
+  branches: ReadonlyArray<{ id: string; label: string }>;
+  selectedBranch: string;
   navItems: AppNavItem[];
   children: React.ReactNode;
 };
@@ -36,11 +35,18 @@ export function AppLayout({
   const router = useRouter();
   const { themeSetting, setThemeSetting } = useTheme();
   const [isPending, startTransition] = useTransition();
-  const [branch, setBranch] = useState<BranchId>(selectedBranch);
+  const [branch, setBranch] = useState(selectedBranch);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const userDisplay = userName.trim() ? userName : userRole;
   const selectedBranchLabel = branches.find((item) => item.id === branch)?.label ?? "Sucursal";
+  const selectedBranchDisplay = selectedBranchLabel.includes(" · ")
+    ? selectedBranchLabel.split(" · ").slice(1).join(" · ")
+    : selectedBranchLabel;
   const hideContentPanel = pathname === "/dashboard" || pathname.startsWith("/dashboard/");
+
+  useEffect(() => {
+    setBranch(selectedBranch);
+  }, [selectedBranch]);
 
   useEffect(() => {
     if (!mobileMenuOpen) return;
@@ -58,7 +64,7 @@ export function AppLayout({
     };
   }, [mobileMenuOpen]);
 
-  async function onBranchChange(next: BranchId) {
+  async function onBranchChange(next: string) {
     setMobileMenuOpen(false);
     setBranch(next);
     await fetch("/api/session/branch", {
@@ -116,20 +122,28 @@ export function AppLayout({
               <span
                 aria-hidden="true"
                 style={{
-                  fontSize: 12,
+                  fontSize: 11,
                   fontWeight: 600,
                   lineHeight: 1,
                   color: "var(--color-sidebar-text)",
                   pointerEvents: "none",
+                  display: "block",
+                  width: "100%",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                  textAlign: "center",
+                  padding: "0 12px",
                 }}
+                title={selectedBranchLabel}
               >
-                {selectedBranchLabel}
+                {selectedBranchDisplay}
               </span>
               <select
                 value={branch}
-                onChange={(event) => onBranchChange(event.target.value as BranchId)}
+                onChange={(event) => onBranchChange(event.target.value)}
                 className="chip-select"
-                disabled={isPending}
+                disabled={isPending || branches.length === 0}
                 style={{
                   position: "absolute",
                   inset: 0,

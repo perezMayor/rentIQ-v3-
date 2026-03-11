@@ -138,18 +138,6 @@ a {
   margin-right: auto;
 }
 
-.brand-logo-missing {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 40px;
-  width: 100%;
-  border: 1px dashed rgba(255, 255, 255, 0.45);
-  border-radius: 8px;
-  font-size: 0.78rem;
-  opacity: 0.9;
-}
-
 .brand-subtitle {
   color: rgba(243, 244, 246, 0.78);
   font-size: 0.9rem;
@@ -959,6 +947,27 @@ select {
   padding-right: 2rem;
 }
 
+input[type="date"],
+input[type="datetime-local"] {
+  position: relative;
+  padding-right: 2.6rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  appearance: none;
+}
+
+input[type="date"]::-webkit-calendar-picker-indicator,
+input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  opacity: 0.78;
+  filter: saturate(1.2);
+}
+
+html[data-theme="dark"] input[type="date"]::-webkit-calendar-picker-indicator,
+html[data-theme="dark"] input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+  filter: invert(1) brightness(1.15);
+}
+
 .toolbar-chip .chip-select {
   width: auto !important;
   min-width: 72px;
@@ -1032,6 +1041,10 @@ select {
   gap: 0.35rem;
 }
 
+.field-compact {
+  max-width: 240px;
+}
+
 .extras-inline-row {
   display: grid;
   grid-template-columns: minmax(260px, 1fr) 110px 120px 120px auto;
@@ -1051,6 +1064,243 @@ select {
   min-width: 120px;
   width: auto;
   height: var(--control-height);
+}
+
+.budget-note-box {
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--panel-muted);
+}
+
+.budget-note-box p {
+  margin: 0;
+}
+
+.budget-concept-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) repeat(4, minmax(0, 0.9fr));
+  gap: 0.55rem 0.75rem;
+  align-items: end;
+}
+
+.budget-concept-grid > label {
+  min-width: 0;
+  gap: 0.28rem;
+}
+
+.budget-concept-main,
+.budget-concept-meta,
+.budget-concept-total {
+  min-width: 0;
+}
+
+.budget-concept-main {
+  min-width: 240px;
+}
+
+.budget-concept-meta {
+  min-width: 108px;
+}
+
+.budget-concept-total {
+  min-width: 130px;
+  max-width: 180px;
+}
+
+.budget-concept-grid input,
+.budget-concept-grid select {
+  min-width: 0;
+}
+
+.budget-concept-grid input[readonly] {
+  background: color-mix(in srgb, var(--color-surface) 80%, var(--color-surface-strong));
+}
+
+.budget-add-btn {
+  width: 100%;
+  margin-top: 0.15rem;
+}
+
+.budget-table-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+  margin-top: 0.2rem;
+}
+
+.budget-bottom-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  gap: 0.85rem;
+  align-items: start;
+  margin-top: 0.3rem;
+}
+
+.budget-fuel-field {
+  max-width: 220px;
+}
+
+.budget-discount-card {
+  width: 100%;
+  padding: 0.75rem;
+  gap: 0.65rem;
+}
+
+.budget-discount-card-full {
+  margin-top: 0.75rem;
+  position: relative;
+}
+
+.budget-discount-card-full h4 {
+  margin: 0 0 0.2rem;
+}
+
+.budget-discount-card h4 {
+  margin: 0;
+}
+
+.budget-table-grid .data-table th,
+.budget-table-grid .data-table td {
+  padding: 0.56rem 0.65rem;
+}
+
+.budget-table-grid .data-table {
+  table-layout: fixed;
+}
+
+.budget-table-grid .data-table th:nth-child(1),
+.budget-table-grid .data-table td:nth-child(1) {
+  width: 40%;
+}
+
+.budget-table-grid .data-table th:nth-child(2),
+.budget-table-grid .data-table td:nth-child(2) {
+  width: 24%;
+}
+
+.budget-table-grid .data-table th:nth-child(3),
+.budget-table-grid .data-table td:nth-child(3) {
+  width: 16%;
+}
+
+.budget-table-grid .data-table th:nth-child(4),
+.budget-table-grid .data-table td:nth-child(4) {
+  width: 110px;
+  text-align: right;
+}
+
+.budget-table-grid .data-table td:nth-child(1),
+.budget-table-grid .data-table td:nth-child(2),
+.budget-table-grid .data-table td:nth-child(3) {
+  white-space: normal;
+}
+
+.budget-row-action {
+  min-height: var(--control-height-compact);
+  padding: 0 0.7rem;
+  min-width: 92px;
+  width: 92px;
+  max-width: 100%;
+  font-size: 0.84rem;
+  white-space: nowrap;
+  justify-content: center;
+}
+
+.budget-discount-pills {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 0.45rem;
+  width: 100%;
+  align-items: flex-start;
+}
+
+.budget-discount-pills .primary-btn,
+.budget-discount-pills .secondary-btn {
+  flex: 1 1 0;
+  width: auto;
+  min-width: 0;
+  min-height: var(--control-height-compact);
+  padding: 0 0.55rem;
+  font-size: 0.84rem;
+}
+
+.budget-discount-other {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.budget-discount-other > .primary-btn,
+.budget-discount-other > .secondary-btn {
+  width: 100%;
+}
+
+.budget-discount-other-input {
+  display: block;
+  width: 100%;
+}
+
+.budget-discount-other-input input {
+  min-height: var(--control-height-compact);
+  height: var(--control-height-compact);
+  text-align: center;
+  padding-inline: 0.55rem;
+}
+
+@media (max-width: 1360px) {
+  .budget-concept-grid {
+    grid-template-columns: minmax(0, 1.8fr) repeat(2, minmax(0, 1fr));
+    gap: 0.55rem 0.65rem;
+  }
+
+  .budget-concept-main {
+    grid-column: 1 / -1;
+    min-width: 0;
+  }
+
+  .budget-concept-total {
+    grid-column: 1 / span 1;
+    max-width: none;
+  }
+
+  .budget-bottom-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .budget-fuel-field {
+    max-width: 260px;
+  }
+
+  .budget-summary-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .budget-summary-head {
+    flex-direction: column;
+  }
+
+  .budget-summary-total {
+    min-width: 0;
+    width: 100%;
+    text-align: left;
+  }
+
+  .budget-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .budget-discount-pills {
+    flex-wrap: wrap;
+  }
+
+  .budget-send-row {
+    grid-template-columns: 1fr;
+  }
 }
 
 .col-span-2 {
@@ -1224,30 +1474,49 @@ select {
 
 .table-wrap {
   overflow-x: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--color-surface-strong) 92%, transparent);
+  box-shadow: var(--shadow-soft);
 }
 
 .data-table {
   width: 100%;
   border-collapse: collapse;
+  min-width: 100%;
+  table-layout: auto;
 }
 
 .data-table th,
 .data-table td {
   border-bottom: 1px solid var(--color-border);
   text-align: left;
-  padding: 0.56rem 0.6rem;
+  padding: 0.62rem 0.72rem;
   vertical-align: top;
+  white-space: nowrap;
 }
 
 .data-table thead th {
-  font-size: 0.78rem;
+  font-size: 0.8rem;
   font-weight: 700;
   color: var(--color-text-muted);
-  background: color-mix(in srgb, var(--color-surface) 72%, transparent);
+  background: color-mix(in srgb, var(--color-surface) 84%, transparent);
+  position: sticky;
+  top: 0;
+  z-index: 1;
 }
 
 .data-table tbody tr:hover {
   background: color-mix(in srgb, var(--color-surface) 44%, transparent);
+}
+
+.data-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.data-table td:last-child,
+.data-table th:last-child {
+  white-space: normal;
 }
 
 .inline-actions-cell {
@@ -1378,31 +1647,112 @@ select {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 320px;
   gap: 0.75rem;
+  align-items: start;
 }
 
-.price-side-card {
+.budget-summary-card {
   border: 1px solid var(--color-border);
-  border-radius: 10px;
-  padding: 0.75rem;
+  border-radius: 14px;
+  padding: 0.9rem 1rem;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
-  background: var(--color-surface-strong);
+  gap: 0.9rem;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--color-surface-strong) 92%, white) 0%, var(--color-surface-strong) 100%);
+  box-shadow: var(--shadow-soft);
 }
 
-.price-side-card label {
+.budget-summary-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+.budget-summary-head h4 {
+  margin: 0 0 0.15rem;
+}
+
+.budget-summary-head .muted-text {
+  display: block;
+}
+
+.budget-summary-total {
+  min-width: 220px;
+  border: 1px solid color-mix(in srgb, var(--color-primary) 26%, var(--color-border));
+  border-radius: 12px;
+  padding: 0.75rem 0.9rem;
+  background: color-mix(in srgb, var(--color-primary) 7%, var(--color-surface-strong));
+  text-align: right;
+}
+
+.budget-summary-total span {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+}
+
+.budget-summary-total strong {
+  display: block;
+  font-size: 1.5rem;
+  line-height: 1.1;
+  color: var(--color-text-primary);
+}
+
+.budget-summary-total-inline {
+  align-self: flex-end;
+}
+
+.budget-summary-total-inline strong {
+  font-size: 1.3rem;
+}
+
+.budget-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 0.7rem;
+}
+
+.budget-summary-item {
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  padding: 0.7rem 0.75rem;
+  background: color-mix(in srgb, var(--color-surface) 50%, var(--color-surface-strong));
+}
+
+.budget-summary-item span {
+  display: block;
+  margin-bottom: 0.25rem;
+  font-size: 0.78rem;
+  color: var(--color-text-muted);
+}
+
+.budget-summary-item strong {
+  display: block;
+  font-size: 1rem;
+  line-height: 1.15;
+}
+
+.budget-send-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 220px;
+  gap: 0.75rem;
+  align-items: end;
+}
+
+.budget-send-field {
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
 }
 
-.price-total-box {
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  padding: 0.6rem;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
+.budget-send-field span {
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+}
+
+.budget-send-btn {
+  width: 100%;
 }
 
 .planning-group-card {
@@ -1914,6 +2264,55 @@ html[data-theme="dark"] .quick-pick-item {
   padding-right: 0.2rem;
 }
 
+.contract-reverse-topbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: end;
+  padding: 0.15rem 0 0.1rem;
+}
+
+.contract-reverse-font input {
+  max-width: 110px;
+}
+
+.contract-reverse-editor {
+  display: flex;
+  flex: 1;
+}
+
+.contract-reverse-editor textarea {
+  min-height: 100%;
+  height: 100%;
+  resize: vertical;
+}
+
+.contract-reverse-legacy {
+  padding: 0.75rem 0.9rem;
+}
+
+.contract-reverse-legacy summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.visual-template-blocks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.25rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.visual-template-blocks label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+}
+
 @media (max-width: 1024px) {
   .template-panel-grid {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) !important;
@@ -2064,6 +2463,14 @@ html[data-theme="dark"] .quick-pick-item {
   }
 
   .extras-inline-row {
+    grid-template-columns: 1fr;
+  }
+
+  .budget-table-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .budget-concept-grid {
     grid-template-columns: 1fr;
   }
 

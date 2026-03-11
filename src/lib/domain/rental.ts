@@ -33,6 +33,7 @@ export type Reservation = {
   assignedVehicleGroup: string;
   priceBreakdown: string;
   extrasBreakdown: string;
+  discountBreakdown: string;
   baseAmount: number;
   discountAmount: number;
   extrasAmount: number;
@@ -107,9 +108,11 @@ export type Contract = {
   pickupAt: string;
   vehiclePlate: string;
   billedCarGroup: string;
+  appliedRate: string;
   status: "ABIERTO" | "CERRADO";
   priceBreakdown: string;
   extrasBreakdown: string;
+  discountBreakdown: string;
   baseAmount: number;
   discountAmount: number;
   extrasAmount: number;
@@ -198,7 +201,7 @@ export type Invoice = {
 export type TemplateDocument = {
   id: string;
   templateCode: string;
-  templateType: "CONTRATO" | "CONFIRMACION_RESERVA" | "FACTURA";
+  templateType: "CONTRATO" | "CONFIRMACION_RESERVA" | "PRESUPUESTO" | "FACTURA";
   language: string;
   title: string;
   htmlContent: string;
@@ -299,6 +302,7 @@ export type TariffPlan = {
   season: string;
   validFrom: string;
   validTo: string;
+  courtesyHours: number;
   priceMode: "PRECIO_A" | "PRECIO_B" | "PRECIO_C";
   active: boolean;
   notes: string;
@@ -394,6 +398,7 @@ export type VehicleExtra = {
   id: string;
   code: string;
   name: string;
+  kind: "SEGURO" | "EXTRA";
   priceMode: "FIJO" | "POR_DIA";
   unitPrice: number;
   maxDays: number;
@@ -403,8 +408,19 @@ export type VehicleExtra = {
 };
 
 export type CompanyBranch = {
+  id: number;
   code: string;
   name: string;
+  contractCounterStart: number;
+  address: string;
+  postalCode: string;
+  municipality: string;
+  province: string;
+  country: string;
+  phone: string;
+  mobile: string;
+  email: string;
+  active: boolean;
 };
 
 export type BranchScheduleDay = {
@@ -470,10 +486,15 @@ export type CompanySettings = {
   contractFrontFooter: string;
   contractBackContent: string;
   contractBackContentType: "TEXT" | "HTML";
+  contractBackLayout: "SINGLE" | "DUAL";
+  contractBackFontSize: number;
+  contractBackContentEs: string;
+  contractBackContentEn: string;
   logoDataUrl: string;
   brandPrimaryColor: string;
   brandSecondaryColor: string;
   defaultIvaPercent: number;
+  courtesyHours: number;
   salesChannels: string[];
   providers: string[];
   backupRetentionDays: number;
@@ -486,7 +507,7 @@ export type CompanySettings = {
   invoiceNumberScope: "GLOBAL" | "BRANCH";
   branches: CompanyBranch[];
   branchSchedules: Record<string, BranchScheduleConfig>;
-  contractNumberPattern: "aa-sucursal-numero";
+  contractNumberPattern: "aa-id-numero";
   invoiceNumberPattern: "serie-digitos-global" | "serie-digitos-sucursal";
   updatedAt: string;
   updatedBy: string;

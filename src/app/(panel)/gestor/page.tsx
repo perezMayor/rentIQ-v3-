@@ -1,18 +1,18 @@
 // Página del módulo gestor.
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { getSessionUser } from "@/lib/auth";
+import { getSelectedBranchId, getSessionUser } from "@/lib/auth";
+import { getActionErrorMessage } from "@/lib/action-errors";
 import { createFullBackup, listBackups, restoreBackup } from "@/lib/services/backup-service";
 import {
+  changeOwnUserPassword,
   createUserAccount,
   createDailyOperationalExpense,
   createTariffPlan,
-  createTemplate,
   deleteUserAccount,
   deleteInternalExpense,
   deleteTariffBracket,
   deleteTariffPlan,
-  deleteTemplate,
   getCompanySettings,
   importTariffCatalogFromCsv,
   listUserAccounts,
@@ -21,18 +21,16 @@ import {
   listTariffCatalog,
   listTariffPlans,
   listTemplates,
+  requestUserPasswordRecovery,
   setUserAccountActive,
   updateCompanySettings,
   updateInternalExpense,
   updateTariffPlan,
   updateUserAccount,
-  updateTemplate,
   upsertTariffBracket,
   upsertTariffPrice,
   validateDailyOperationalExpenses,
 } from "@/lib/services/rental-service";
-import { TEMPLATE_MACRO_GROUPS } from "@/lib/services/template-macro-catalog";
-import { getTemplatePresetHtml } from "@/lib/services/template-presets";
 import styles from "./gestor.module.css";
 import { ModuleHelp } from "@/components/module-help";
 
@@ -60,6 +58,7 @@ type Props = {
     branchView?: string;
     branchCodeDraft?: string;
     branchNameDraft?: string;
+    branchContractCounterStartDraft?: string;
   }>;
 };
 
@@ -77,8 +76,24 @@ function getDefaultRange() {
   return { from: from.toISOString().slice(0, 10), to: now.toISOString().slice(0, 10) };
 }
 
-function serializeBranchesRaw(rows: Array<{ code: string; name: string }>) {
-  return rows.map((item) => `${item.code}|${item.name}`).join("\n");
+function serializeBranchesRaw(
+  rows: Array<{
+    id: number;
+    code: string;
+    name: string;
+    contractCounterStart: number;
+    address: string;
+    postalCode: string;
+    municipality: string;
+    province: string;
+    country: string;
+    phone: string;
+    mobile: string;
+    email: string;
+    active: boolean;
+  }>,
+) {
+  return JSON.stringify(rows);
 }
 
 const WEEKLY_DAY_FIELDS = [
@@ -122,17 +137,19 @@ export default async function GestorPage({ searchParams }: Props) {
   const user = await getSessionUser();
   if (!user) redirect("/login");
   if (user.role === "LECTOR") redirect("/dashboard");
+  const selectedBranchId = await getSelectedBranchId();
 
   const params = await searchParams;
   const tab = normalizeTab((params.tab ?? "usuarios").toLowerCase());
   const isSuperAdmin = user.role === "SUPER_ADMIN";
 
   const settings = await getCompanySettings();
-  const selectedBranchCode = (params.branchCode ?? "").trim().toUpperCase() || settings.branches[0]?.code || "";
+  const selectedBranchCode = (params.branchCode ?? "").trim().toUpperCase() || selectedBranchId || settings.branches[0]?.code || "";
   const branchView: BranchEditorView = params.branchView === "horarios" ? "horarios" : "general";
   const selectedBranch = settings.branches.find((item) => item.code === selectedBranchCode) ?? null;
   const draftBranchCode = params.branchCodeDraft ?? selectedBranch?.code ?? "";
   const draftBranchName = params.branchNameDraft ?? selectedBranch?.name ?? "";
+  const draftBranchContractCounterStart = params.branchContractCounterStartDraft ?? String(selectedBranch?.contractCounterStart ?? 0);
   const selectedBranchSchedule =
     selectedBranchCode && settings.branchSchedules?.[selectedBranchCode]
       ? settings.branchSchedules[selectedBranchCode]
@@ -179,34 +196,9 @@ export default async function GestorPage({ searchParams }: Props) {
   const dailyExpenses = await listDailyOperationalExpenses({ from, to, plate, worker });
   const expensesValidation = await validateDailyOperationalExpenses({ from, to });
 
-  const qTemplate = params.qTemplate ?? "";
-  const panelView = params.view === "amplia" ? "amplia" : "compacta";
-  const panelColumns = panelView === "compacta" ? "minmax(0,1fr) minmax(0,1fr)" : "1fr";
-  const panelMinHeight = panelView === "compacta" ? "430px" : "auto";
-  const panelMaxHeight = panelView === "compacta" ? "430px" : "none";
-  const panelScroll = panelView === "compacta" ? "auto" : "visible";
-  const templates = await listTemplates(qTemplate);
   const templatesInUse = (await listTemplates("")).filter((item) => item.active);
   const qUser = params.qUser ?? "";
   const users = await listUserAccounts(qUser);
-
-  async function saveCompanySettingsAction(formData: FormData) {
-    "use server";
-    const actor = await getSessionUser();
-    if (!actor) redirect("/login");
-    if (actor.role === "LECTOR") redirect("/gestor?tab=sucursales&error=Permiso+denegado");
-    try {
-      await updateCompanySettings(Object.fromEntries(formData.entries()) as Record<string, string>, {
-        id: actor.id,
-        role: actor.role,
-      });
-      revalidatePath("/gestor");
-      redirect("/gestor?tab=sucursales&ok=Sucursales+guardadas");
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Error guardando configuración";
-      redirect(`/gestor?tab=sucursales&error=${encodeURIComponent(message)}`);
-    }
-  }
 
   async function upsertBranchAction(formData: FormData) {
     "use server";
@@ -216,26 +208,52 @@ export default async function GestorPage({ searchParams }: Props) {
 
     const code = String(formData.get("branchCode") ?? "").trim().toUpperCase();
     const name = String(formData.get("branchName") ?? "").trim();
+    const contractCounterStart = Math.max(0, Math.floor(Number(formData.get("contractCounterStart") ?? "0") || 0));
+    const address = String(formData.get("address") ?? "").trim();
+    const postalCode = String(formData.get("postalCode") ?? "").trim();
+    const municipality = String(formData.get("municipality") ?? "").trim();
+    const province = String(formData.get("province") ?? "").trim();
+    const country = String(formData.get("country") ?? "").trim();
+    const phone = String(formData.get("phone") ?? "").trim();
+    const mobile = String(formData.get("mobile") ?? "").trim();
+    const email = String(formData.get("email") ?? "").trim();
+    const active = String(formData.get("active") ?? "true") === "true";
 
     if (!code) {
       redirect("/gestor?tab=sucursales&error=El+código+de+la+sucursal+es+obligatorio");
     }
     if (!name) {
-      redirect(`/gestor?tab=sucursales&branchCodeDraft=${encodeURIComponent(code)}&error=El+nombre+de+la+sucursal+es+obligatorio`);
+      redirect(`/gestor?tab=sucursales&branchCodeDraft=${encodeURIComponent(code)}&branchContractCounterStartDraft=${encodeURIComponent(String(contractCounterStart))}&error=El+nombre+de+la+sucursal+es+obligatorio`);
     }
 
     const current = await getCompanySettings();
+    const existing = current.branches.find((item) => item.code === code) ?? null;
     const next = current.branches.filter((item) => item.code !== code);
-    next.push({ code, name });
-    next.sort((a, b) => a.code.localeCompare(b.code));
+    const nextId = existing?.id ?? (next.reduce((max, item) => Math.max(max, item.id), 0) + 1);
+    next.push({
+      id: nextId,
+      code,
+      name,
+      contractCounterStart,
+      address,
+      postalCode,
+      municipality,
+      province,
+      country,
+      phone,
+      mobile,
+      email,
+      active,
+    });
+    next.sort((a, b) => a.id - b.id || a.code.localeCompare(b.code));
 
     try {
       await updateCompanySettings({ branchesRaw: serializeBranchesRaw(next) }, { id: actor.id, role: actor.role });
       revalidatePath("/gestor");
       redirect(`/gestor?tab=sucursales&branchCode=${encodeURIComponent(code)}&ok=${encodeURIComponent("Sucursal guardada")}`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error guardando sucursal";
-      redirect(`/gestor?tab=sucursales&branchCodeDraft=${encodeURIComponent(code)}&branchNameDraft=${encodeURIComponent(name)}&error=${encodeURIComponent(message)}`);
+      const message = getActionErrorMessage(error, "Error guardando sucursal");
+      redirect(`/gestor?tab=sucursales&branchCodeDraft=${encodeURIComponent(code)}&branchNameDraft=${encodeURIComponent(name)}&branchContractCounterStartDraft=${encodeURIComponent(String(contractCounterStart))}&error=${encodeURIComponent(message)}`);
     }
   }
 
@@ -262,7 +280,7 @@ export default async function GestorPage({ searchParams }: Props) {
       const nextCode = next[0]?.code ?? "";
       redirect(`/gestor?tab=sucursales${nextCode ? `&branchCode=${encodeURIComponent(nextCode)}` : ""}&ok=${encodeURIComponent("Sucursal eliminada")}`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error eliminando sucursal";
+      const message = getActionErrorMessage(error, "Error eliminando sucursal");
       redirect(`/gestor?tab=sucursales&branchCode=${encodeURIComponent(code)}&error=${encodeURIComponent(message)}`);
     }
   }
@@ -348,7 +366,7 @@ export default async function GestorPage({ searchParams }: Props) {
         `/gestor?tab=sucursales&branchCode=${encodeURIComponent(branchCode)}&branchView=horarios&ok=${encodeURIComponent("Horarios guardados")}`,
       );
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error guardando horarios";
+      const message = getActionErrorMessage(error, "Error guardando horarios");
       redirect(
         `/gestor?tab=sucursales&branchCode=${encodeURIComponent(branchCode)}&branchView=horarios&error=${encodeURIComponent(message)}`,
       );
@@ -365,7 +383,7 @@ export default async function GestorPage({ searchParams }: Props) {
       revalidatePath("/gestor");
       redirect(`/gestor?tab=usuarios&qUser=${encodeURIComponent(qUser)}&ok=Usuario+creado`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error creando usuario";
+      const message = getActionErrorMessage(error, "Error creando usuario");
       redirect(`/gestor?tab=usuarios&qUser=${encodeURIComponent(qUser)}&error=${encodeURIComponent(message)}`);
     }
   }
@@ -384,7 +402,7 @@ export default async function GestorPage({ searchParams }: Props) {
       revalidatePath("/gestor");
       redirect(`/gestor?tab=usuarios&qUser=${encodeURIComponent(qUser)}&ok=Usuario+actualizado`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error actualizando usuario";
+      const message = getActionErrorMessage(error, "Error actualizando usuario");
       redirect(`/gestor?tab=usuarios&qUser=${encodeURIComponent(qUser)}&error=${encodeURIComponent(message)}`);
     }
   }
@@ -401,7 +419,7 @@ export default async function GestorPage({ searchParams }: Props) {
       revalidatePath("/gestor");
       redirect(`/gestor?tab=usuarios&qUser=${encodeURIComponent(qUser)}&ok=Estado+de+usuario+actualizado`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error actualizando estado";
+      const message = getActionErrorMessage(error, "Error actualizando estado");
       redirect(`/gestor?tab=usuarios&qUser=${encodeURIComponent(qUser)}&error=${encodeURIComponent(message)}`);
     }
   }
@@ -417,7 +435,44 @@ export default async function GestorPage({ searchParams }: Props) {
       revalidatePath("/gestor");
       redirect(`/gestor?tab=usuarios&qUser=${encodeURIComponent(qUser)}&ok=Usuario+borrado`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error borrando usuario";
+      const message = getActionErrorMessage(error, "Error borrando usuario");
+      redirect(`/gestor?tab=usuarios&qUser=${encodeURIComponent(qUser)}&error=${encodeURIComponent(message)}`);
+    }
+  }
+
+  async function changeOwnPasswordFromUsersAction(formData: FormData) {
+    "use server";
+    const actor = await getSessionUser();
+    if (!actor) redirect("/login");
+    try {
+      await changeOwnUserPassword(
+        actor.id,
+        {
+          currentPassword: String(formData.get("currentPassword") ?? ""),
+          nextPassword: String(formData.get("nextPassword") ?? ""),
+          confirmPassword: String(formData.get("confirmPassword") ?? ""),
+        },
+        { id: actor.id, role: actor.role },
+      );
+      revalidatePath("/gestor");
+      redirect(`/gestor?tab=usuarios&qUser=${encodeURIComponent(qUser)}&ok=${encodeURIComponent("Contraseña actualizada")}`);
+    } catch (error) {
+      const message = getActionErrorMessage(error, "Error actualizando contraseña");
+      redirect(`/gestor?tab=usuarios&qUser=${encodeURIComponent(qUser)}&error=${encodeURIComponent(message)}`);
+    }
+  }
+
+  async function requestUserRecoveryFromUsersAction(formData: FormData) {
+    "use server";
+    const actor = await getSessionUser();
+    if (!actor) redirect("/login");
+    const email = String(formData.get("email") ?? "").trim();
+    try {
+      await requestUserPasswordRecovery(email);
+      revalidatePath("/gestor");
+      redirect(`/gestor?tab=usuarios&qUser=${encodeURIComponent(qUser)}&ok=${encodeURIComponent("Recuperación registrada")}`);
+    } catch (error) {
+      const message = getActionErrorMessage(error, "Error solicitando recuperación");
       redirect(`/gestor?tab=usuarios&qUser=${encodeURIComponent(qUser)}&error=${encodeURIComponent(message)}`);
     }
   }
@@ -433,9 +488,24 @@ export default async function GestorPage({ searchParams }: Props) {
       revalidatePath("/tarifas");
       redirect("/gestor?tab=tarifas&ok=Tarifa+creada");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error creando tarifa";
+      const message = getActionErrorMessage(error, "Error creando tarifa");
       redirect(`/gestor?tab=tarifas&error=${encodeURIComponent(message)}`);
     }
+  }
+
+  async function saveTariffCourtesyAction(formData: FormData) {
+    "use server";
+    const actor = await getSessionUser();
+    if (!actor) redirect("/login");
+    try {
+      await updateCompanySettings({ courtesyHours: String(formData.get("courtesyHours") ?? "0") }, { id: actor.id, role: actor.role });
+      revalidatePath("/gestor");
+      revalidatePath("/tarifas");
+    } catch (error) {
+      const message = getActionErrorMessage(error, "Error guardando horas de cortesía");
+      redirect(`/gestor?tab=tarifas&error=${encodeURIComponent(message)}`);
+    }
+    redirect("/gestor?tab=tarifas&ok=Horas+de+cortesia+guardadas");
   }
 
   async function importTariffCsvAction(formData: FormData) {
@@ -461,7 +531,7 @@ export default async function GestorPage({ searchParams }: Props) {
         )}`,
       );
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error importando tarifas";
+      const message = getActionErrorMessage(error, "Error importando tarifas");
       redirect(`/gestor?tab=tarifas&error=${encodeURIComponent(message)}`);
     }
   }
@@ -479,7 +549,7 @@ export default async function GestorPage({ searchParams }: Props) {
       revalidatePath("/tarifas");
       redirect(`/gestor?tab=tarifas&tariffPlanId=${encodeURIComponent(planId)}&ok=Tarifa+actualizada`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error actualizando tarifa";
+      const message = getActionErrorMessage(error, "Error actualizando tarifa");
       redirect(`/gestor?tab=tarifas&tariffPlanId=${encodeURIComponent(planId)}&error=${encodeURIComponent(message)}`);
     }
   }
@@ -496,7 +566,7 @@ export default async function GestorPage({ searchParams }: Props) {
       revalidatePath("/tarifas");
       redirect("/gestor?tab=tarifas&ok=Tarifa+borrada");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error borrando tarifa";
+      const message = getActionErrorMessage(error, "Error borrando tarifa");
       redirect(`/gestor?tab=tarifas&tariffPlanId=${encodeURIComponent(planId)}&error=${encodeURIComponent(message)}`);
     }
   }
@@ -514,7 +584,7 @@ export default async function GestorPage({ searchParams }: Props) {
       revalidatePath("/tarifas");
       redirect(`/gestor?tab=tarifas&tariffPlanId=${encodeURIComponent(planId)}&ok=Tramo+guardado`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error guardando tramo";
+      const message = getActionErrorMessage(error, "Error guardando tramo");
       redirect(`/gestor?tab=tarifas&tariffPlanId=${encodeURIComponent(planId)}&error=${encodeURIComponent(message)}`);
     }
   }
@@ -532,7 +602,7 @@ export default async function GestorPage({ searchParams }: Props) {
       revalidatePath("/tarifas");
       redirect(`/gestor?tab=tarifas&tariffPlanId=${encodeURIComponent(planId)}&ok=Tramo+borrado`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error borrando tramo";
+      const message = getActionErrorMessage(error, "Error borrando tramo");
       redirect(`/gestor?tab=tarifas&tariffPlanId=${encodeURIComponent(planId)}&error=${encodeURIComponent(message)}`);
     }
   }
@@ -563,7 +633,7 @@ export default async function GestorPage({ searchParams }: Props) {
       revalidatePath("/tarifas");
       redirect(`/gestor?tab=tarifas&tariffPlanId=${encodeURIComponent(planId)}&ok=Tabla+guardada`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error guardando tabla";
+      const message = getActionErrorMessage(error, "Error guardando tabla");
       redirect(`/gestor?tab=tarifas&tariffPlanId=${encodeURIComponent(planId)}&error=${encodeURIComponent(message)}`);
     }
   }
@@ -581,7 +651,7 @@ export default async function GestorPage({ searchParams }: Props) {
       revalidatePath("/vehiculos");
       redirect(`/gestor?tab=gastos&from=${from}&to=${to}&plate=${encodeURIComponent(plate)}&worker=${encodeURIComponent(worker)}&expenseDate=${encodeURIComponent(expenseDate)}&ok=Gasto+guardado`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error guardando gasto";
+      const message = getActionErrorMessage(error, "Error guardando gasto");
       redirect(`/gestor?tab=gastos&from=${from}&to=${to}&plate=${encodeURIComponent(plate)}&worker=${encodeURIComponent(worker)}&expenseDate=${encodeURIComponent(expenseDate)}&error=${encodeURIComponent(message)}`);
     }
   }
@@ -601,7 +671,7 @@ export default async function GestorPage({ searchParams }: Props) {
       revalidatePath("/gastos");
       redirect(`/gestor?tab=gastos&from=${from}&to=${to}&plate=${encodeURIComponent(plate)}&worker=${encodeURIComponent(worker)}&expenseDate=${encodeURIComponent(expenseDate)}&ok=Gasto+actualizado`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error actualizando gasto";
+      const message = getActionErrorMessage(error, "Error actualizando gasto");
       redirect(`/gestor?tab=gastos&from=${from}&to=${to}&plate=${encodeURIComponent(plate)}&worker=${encodeURIComponent(worker)}&expenseDate=${encodeURIComponent(expenseDate)}&error=${encodeURIComponent(message)}`);
     }
   }
@@ -618,89 +688,8 @@ export default async function GestorPage({ searchParams }: Props) {
       revalidatePath("/gastos");
       redirect(`/gestor?tab=gastos&from=${from}&to=${to}&plate=${encodeURIComponent(plate)}&worker=${encodeURIComponent(worker)}&expenseDate=${encodeURIComponent(expenseDate)}&ok=Gasto+borrado`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error borrando gasto";
+      const message = getActionErrorMessage(error, "Error borrando gasto");
       redirect(`/gestor?tab=gastos&from=${from}&to=${to}&plate=${encodeURIComponent(plate)}&worker=${encodeURIComponent(worker)}&expenseDate=${encodeURIComponent(expenseDate)}&error=${encodeURIComponent(message)}`);
-    }
-  }
-
-  async function createTemplateAction(formData: FormData) {
-    "use server";
-    const actor = await getSessionUser();
-    if (!actor) redirect("/login");
-    if (actor.role === "LECTOR") redirect("/gestor?tab=plantillas&error=Permiso+denegado");
-    try {
-      await createTemplate(Object.fromEntries(formData.entries()) as Record<string, string>, { id: actor.id, role: actor.role });
-      revalidatePath("/gestor");
-      revalidatePath("/plantillas");
-      redirect(`/gestor?tab=plantillas&qTemplate=${encodeURIComponent(qTemplate)}&ok=Plantilla+creada`);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Error creando plantilla";
-      redirect(`/gestor?tab=plantillas&qTemplate=${encodeURIComponent(qTemplate)}&error=${encodeURIComponent(message)}`);
-    }
-  }
-
-  async function updateTemplateAction(formData: FormData) {
-    "use server";
-    const actor = await getSessionUser();
-    if (!actor) redirect("/login");
-    if (actor.role === "LECTOR") redirect("/gestor?tab=plantillas&error=Permiso+denegado");
-    try {
-      await updateTemplate(Object.fromEntries(formData.entries()) as Record<string, string>, { id: actor.id, role: actor.role });
-      revalidatePath("/gestor");
-      revalidatePath("/plantillas");
-      redirect(`/gestor?tab=plantillas&qTemplate=${encodeURIComponent(qTemplate)}&ok=Plantilla+actualizada`);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Error actualizando plantilla";
-      redirect(`/gestor?tab=plantillas&qTemplate=${encodeURIComponent(qTemplate)}&error=${encodeURIComponent(message)}`);
-    }
-  }
-
-  async function deleteTemplateAction(formData: FormData) {
-    "use server";
-    const actor = await getSessionUser();
-    if (!actor) redirect("/login");
-    if (actor.role === "LECTOR") redirect("/gestor?tab=plantillas&error=Permiso+denegado");
-    const templateId = String(formData.get("templateId") ?? "");
-    try {
-      await deleteTemplate(templateId, { id: actor.id, role: actor.role });
-      revalidatePath("/gestor");
-      revalidatePath("/plantillas");
-      redirect(`/gestor?tab=plantillas&qTemplate=${encodeURIComponent(qTemplate)}&ok=Plantilla+borrada`);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Error borrando plantilla";
-      redirect(`/gestor?tab=plantillas&qTemplate=${encodeURIComponent(qTemplate)}&error=${encodeURIComponent(message)}`);
-    }
-  }
-
-  async function createTemplatePresetAction(formData: FormData) {
-    "use server";
-    const actor = await getSessionUser();
-    if (!actor) redirect("/login");
-    if (actor.role === "LECTOR") redirect("/gestor?tab=plantillas&error=Permiso+denegado");
-    const templateCode = String(formData.get("templateCode") ?? "").trim();
-    const templateType = String(formData.get("templateType") ?? "CONFIRMACION_RESERVA").trim().toUpperCase();
-    const language = String(formData.get("language") ?? "es").trim().toLowerCase();
-    const title = String(formData.get("title") ?? "").trim();
-    try {
-      await createTemplate(
-        {
-          templateCode,
-          templateType,
-          language,
-          title,
-          htmlContent: getTemplatePresetHtml(
-            templateType as "CONTRATO" | "CONFIRMACION_RESERVA" | "FACTURA",
-            language,
-          ),
-        },
-        { id: actor.id, role: actor.role },
-      );
-      revalidatePath("/gestor");
-      revalidatePath("/plantillas");
-      redirect(`/gestor?tab=plantillas&qTemplate=${encodeURIComponent(qTemplate)}&ok=Plantilla+base+creada`);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Error creando plantilla base";
-      redirect(`/gestor?tab=plantillas&qTemplate=${encodeURIComponent(qTemplate)}&error=${encodeURIComponent(message)}`);
     }
   }
 
@@ -736,7 +725,7 @@ export default async function GestorPage({ searchParams }: Props) {
       revalidatePath("/gestor");
       redirect(`/gestor?tab=backups&ok=${encodeURIComponent(`Restore completado desde ${backupId}`)}`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Restore fallido";
+      const message = getActionErrorMessage(error, "Restore fallido");
       redirect(`/gestor?tab=backups&error=${encodeURIComponent(message)}`);
     }
   }
@@ -842,6 +831,18 @@ export default async function GestorPage({ searchParams }: Props) {
                               </label>
                               <button className="secondary-btn" type="submit">Guardar usuario</button>
                             </form>
+                            {item.id === user.id ? (
+                              <form action={changeOwnPasswordFromUsersAction} className="mini-form">
+                                <label>Contraseña actual<input name="currentPassword" type="password" autoComplete="current-password" /></label>
+                                <label>Nueva contraseña<input name="nextPassword" type="password" autoComplete="new-password" /></label>
+                                <label>Confirmar contraseña<input name="confirmPassword" type="password" autoComplete="new-password" /></label>
+                                <button className="secondary-btn" type="submit">Cambiar contraseña</button>
+                              </form>
+                            ) : null}
+                            <form action={requestUserRecoveryFromUsersAction} className="mini-form">
+                              <input type="hidden" name="email" value={item.email} />
+                              <button className="secondary-btn" type="submit">Recuperar acceso</button>
+                            </form>
                             <form action={setUserStatusAction} className="mini-form">
                               <input type="hidden" name="userId" value={item.id} />
                               <input type="hidden" name="active" value={item.active ? "false" : "true"} />
@@ -882,7 +883,7 @@ export default async function GestorPage({ searchParams }: Props) {
                       href={`/gestor?tab=sucursales&branchCode=${encodeURIComponent(branchItem.code)}`}
                       className={active ? styles.branchTreeItemActive : styles.branchTreeItem}
                     >
-                      <span>{branchItem.code}</span>
+                      <span>{String(branchItem.id).padStart(2, "0")}</span>
                       <strong>{branchItem.name}</strong>
                     </a>
                   );
@@ -910,7 +911,11 @@ export default async function GestorPage({ searchParams }: Props) {
             {branchView === "general" ? (
               <>
                 <form action={upsertBranchAction} className={styles.branchForm}>
-                  <label>
+                  <label className={styles.branchSpan2}>
+                    Número sucursal
+                    <input value={selectedBranch ? String(selectedBranch.id).padStart(2, "0") : "Automático"} readOnly />
+                  </label>
+                  <label className={styles.branchSpan2}>
                     Código
                     <input
                       name="branchCode"
@@ -920,13 +925,97 @@ export default async function GestorPage({ searchParams }: Props) {
                       required
                     />
                   </label>
-                  <label className={styles.branchFormWide}>
+                  <label className={styles.branchSpan3}>
+                    Contratos (último)
+                    <input
+                      name="contractCounterStart"
+                      type="number"
+                      min={0}
+                      step={1}
+                      defaultValue={draftBranchContractCounterStart}
+                      required
+                    />
+                  </label>
+                  <label className={styles.branchSpan2}>
+                    Estado oficina
+                    <select name="active" defaultValue={selectedBranch?.active === false ? "false" : "true"}>
+                      <option value="true">Activa</option>
+                      <option value="false">Inactiva</option>
+                    </select>
+                  </label>
+                  <label className={styles.branchSpan12}>
                     Nombre de sucursal
                     <input
                       name="branchName"
                       defaultValue={draftBranchName}
                       placeholder="OFICINA PRINCIPAL LA MANGA"
                       required
+                    />
+                  </label>
+                  <label className={styles.branchSpan12}>
+                    Dirección
+                    <input
+                      name="address"
+                      defaultValue={selectedBranch?.address ?? ""}
+                      placeholder="Dirección de la sucursal"
+                    />
+                  </label>
+                  <label className={styles.branchSpan2}>
+                    Código postal
+                    <input
+                      name="postalCode"
+                      defaultValue={selectedBranch?.postalCode ?? ""}
+                      inputMode="numeric"
+                      placeholder="03001"
+                    />
+                  </label>
+                  <label className={styles.branchSpan4}>
+                    Municipio
+                    <input
+                      name="municipality"
+                      defaultValue={selectedBranch?.municipality ?? ""}
+                      placeholder="Alicante"
+                    />
+                  </label>
+                  <label className={styles.branchSpan4}>
+                    Provincia
+                    <input
+                      name="province"
+                      defaultValue={selectedBranch?.province ?? ""}
+                      placeholder="Alicante"
+                    />
+                  </label>
+                  <label className={styles.branchSpan2}>
+                    País
+                    <input
+                      name="country"
+                      defaultValue={selectedBranch?.country ?? ""}
+                      placeholder="España"
+                    />
+                  </label>
+                  <label className={styles.branchSpan3}>
+                    Teléfono fijo
+                    <input
+                      name="phone"
+                      defaultValue={selectedBranch?.phone ?? ""}
+                      placeholder="+34 965 000 000"
+                    />
+                  </label>
+                  <label className={styles.branchSpan3}>
+                    Móvil
+                    <input
+                      name="mobile"
+                      defaultValue={selectedBranch?.mobile ?? ""}
+                      placeholder="+34 600 000 000"
+                    />
+                  </label>
+                  <label className={styles.branchSpan6}>
+                    Email
+                    <input
+                      name="email"
+                      type="email"
+                      defaultValue={selectedBranch?.email ?? ""}
+                      placeholder="sucursal@empresa.com"
                     />
                   </label>
                   <div className={styles.branchActions}>
@@ -940,21 +1029,6 @@ export default async function GestorPage({ searchParams }: Props) {
                   </form>
                 ) : null}
 
-                <p className="muted-text">
-                  Este sistema actualmente guarda sucursales con dos campos: código y nombre.
-                </p>
-
-                <details>
-                  <summary>Edición masiva (CODIGO|NOMBRE)</summary>
-                  <form action={saveCompanySettingsAction} className="stack-sm" style={{ marginTop: "0.5rem" }}>
-                    <textarea
-                      name="branchesRaw"
-                      rows={7}
-                      defaultValue={settings.branches.map((branch) => `${branch.code}|${branch.name}`).join("\n")}
-                    />
-                    <button className="secondary-btn" type="submit">Guardar listado completo</button>
-                  </form>
-                </details>
               </>
             ) : (
               <>
@@ -1213,6 +1287,27 @@ export default async function GestorPage({ searchParams }: Props) {
               </section>
             </>
           ) : null}
+
+          <section className="card stack-sm">
+            <h3>Horas de cortesía</h3>
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 320px) minmax(0, 1fr)", gap: "0.9rem", alignItems: "stretch" }}>
+              <form action={saveTariffCourtesyAction} className="inline-search" style={{ alignItems: "center", margin: 0 }}>
+                <input name="courtesyHours" type="number" min={0} step="1" defaultValue={String(settings.courtesyHours ?? 0)} style={{ maxWidth: 96 }} />
+                <button className="secondary-btn" type="submit">Guardar</button>
+              </form>
+              <div className="card-muted" style={{ padding: "0.85rem 1rem", display: "grid", gap: "0.45rem" }}>
+                <div className="table-header-row" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: 0 }}>
+                  <strong>Aplicación global</strong>
+                  <strong>{settings.courtesyHours ?? 0} h</strong>
+                </div>
+                <div className="table-header-row" style={{ justifyContent: "space-between", gap: "1rem", flexWrap: "wrap", marginBottom: 0 }}>
+                  <span className="muted-text">Todas las tarifas</span>
+                  <span className="muted-text">Bloques de 24h</span>
+                  <span className="muted-text">Exceso &gt; cortesía = +1 día</span>
+                </div>
+              </div>
+            </div>
+          </section>
 
           <section className="card stack-sm">
             <h3>Importar tarifas (CSV estándar)</h3>

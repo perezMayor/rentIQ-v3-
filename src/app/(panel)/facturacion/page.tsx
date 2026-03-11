@@ -1,6 +1,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { getSessionUser } from "@/lib/auth";
+import { getSelectedBranchId, getSessionUser } from "@/lib/auth";
+import { formatDateDisplay, formatDateTimeDisplay, formatMoneyDisplay } from "@/lib/formatting";
 import {
   changeInvoiceDate,
   createDerivedInvoiceFromSource,
@@ -92,6 +93,7 @@ export default async function FacturacionPage({ searchParams }: Props) {
   if (!user) {
     redirect("/login");
   }
+  const selectedBranchId = await getSelectedBranchId();
   if (user.role === "LECTOR") {
     redirect("/dashboard?error=Permiso+denegado");
   }
@@ -515,7 +517,7 @@ export default async function FacturacionPage({ searchParams }: Props) {
               className="secondary-btn text-center"
               href={`/api/reporting/facturas/export?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&q=${encodeURIComponent(q)}`}
             >
-              Exportar CSV
+              Exportar PDF
             </a>
           </form>
         </div>
@@ -546,12 +548,12 @@ export default async function FacturacionPage({ searchParams }: Props) {
                     <td>{invoice.contractId || "MANUAL"}</td>
                     <td>{invoice.invoiceType}</td>
                     <td>{invoice.status === "FINAL" ? "Final" : "Borrador"}</td>
-                    <td>{invoice.issuedAt.slice(0, 10)}</td>
+                    <td>{formatDateDisplay(invoice.issuedAt)}</td>
                     <td>
-                      Base {invoice.baseAmount.toFixed(2)} + IVA {invoice.ivaAmount.toFixed(2)} ({invoice.ivaPercent.toFixed(2)}%)
+                      Base {formatMoneyDisplay(invoice.baseAmount)} + IVA {formatMoneyDisplay(invoice.ivaAmount)} ({invoice.ivaPercent.toFixed(2)}%)
                     </td>
-                    <td>{invoice.totalAmount.toFixed(2)}</td>
-                    <td>{invoice.sentLog.length > 0 ? `${invoice.sentLog[invoice.sentLog.length - 1].status} | ${invoice.sentLog[invoice.sentLog.length - 1].sentAt}` : "Sin envíos"}</td>
+                    <td>{formatMoneyDisplay(invoice.totalAmount)}</td>
+                    <td>{invoice.sentLog.length > 0 ? `${invoice.sentLog[invoice.sentLog.length - 1].status} | ${formatDateTimeDisplay(invoice.sentLog[invoice.sentLog.length - 1].sentAt)}` : "Sin envíos"}</td>
                     <td>
                       <details>
                         <summary>Acciones</summary>
@@ -639,7 +641,7 @@ export default async function FacturacionPage({ searchParams }: Props) {
             <select
               name="branchCode"
               required={companySettings.branches.length > 0}
-              defaultValue={(companySettings.branches[0]?.code ?? "SUC-ND").trim()}
+              defaultValue={(companySettings.branches.some((branch) => branch.code === selectedBranchId) ? selectedBranchId : (companySettings.branches[0]?.code ?? "SUC-ND")).trim()}
             >
               {companySettings.branches.length > 0 ? <option value="">Selecciona</option> : null}
               {companySettings.branches.length === 0 ? <option value="SUC-ND">N/D</option> : null}
@@ -747,10 +749,10 @@ export default async function FacturacionPage({ searchParams }: Props) {
               ) : (
                 expenseJournal.rows.map((row, idx) => (
                   <tr key={`${row.contractId}-${row.expenseDate}-${idx}`}>
-                    <td>{row.expenseDate}</td>
+                    <td>{formatDateDisplay(row.expenseDate)}</td>
                     <td>{row.vehiclePlate}</td>
                     <td>{row.category}</td>
-                    <td>{row.amount.toFixed(2)}</td>
+                    <td>{formatMoneyDisplay(row.amount)}</td>
                     <td>{row.sourceType}</td>
                     <td>{row.contractId}</td>
                     <td>{row.batchId || "N/D"}</td>
@@ -762,7 +764,7 @@ export default async function FacturacionPage({ searchParams }: Props) {
             </tbody>
           </table>
         </div>
-        <p className="muted-text">Total gastos internos: {expenseJournal.totalExpenses.toFixed(2)}</p>
+        <p className="muted-text">Total gastos internos: {formatMoneyDisplay(expenseJournal.totalExpenses)}</p>
       </section>
       ) : null}
 
@@ -774,7 +776,7 @@ export default async function FacturacionPage({ searchParams }: Props) {
             className="secondary-btn text-center"
             href={`/api/reporting/facturas/conciliacion/export?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`}
           >
-            Exportar conciliación CSV
+            Exportar conciliación PDF
           </a>
         </div>
         <div className="table-wrap">
@@ -796,11 +798,11 @@ export default async function FacturacionPage({ searchParams }: Props) {
                 closures.map((row) => (
                   <tr key={row.contractId}>
                     <td>{row.contractNumber}</td>
-                    <td>{row.closedAt}</td>
-                    <td>{row.cashAmount.toFixed(2)}</td>
+                    <td>{formatDateTimeDisplay(row.closedAt)}</td>
+                    <td>{formatMoneyDisplay(row.cashAmount)}</td>
                     <td>{row.cashMethod}</td>
                     <td>{row.invoiceNumber}</td>
-                    <td>{row.invoiceTotal.toFixed(2)}</td>
+                    <td>{formatMoneyDisplay(row.invoiceTotal)}</td>
                   </tr>
                 ))
               )}
@@ -844,7 +846,7 @@ export default async function FacturacionPage({ searchParams }: Props) {
                   <tr key={`${log.invoiceId}-${idx}`}>
                     <td>{log.invoiceNumber}</td>
                     <td>{log.invoiceName}</td>
-                    <td>{log.sentAt}</td>
+                    <td>{formatDateTimeDisplay(log.sentAt)}</td>
                     <td>{log.to}</td>
                     <td>{log.sentBy}</td>
                     <td>{log.status}</td>

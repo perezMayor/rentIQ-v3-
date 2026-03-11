@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { loginAdmin } from "./helpers";
 
 function pad2(value: number): string {
   return String(value).padStart(2, "0");
@@ -18,15 +19,6 @@ function buildWindow(daysAhead: number) {
     deliveryAt: toDateTimeLocalString(start),
     pickupAt: toDateTimeLocalString(end),
   };
-}
-
-async function loginAdmin(page: Page) {
-  await page.goto("/login");
-  await page.selectOption("select[name='branch']", "principal");
-  await page.fill("input[name='email']", "admin@rentiq.local");
-  await page.fill("input[name='password']", "Admin#2026");
-  await page.click("button[type='submit']");
-  await expect(page).toHaveURL(/\/dashboard/, { timeout: 30_000 });
 }
 
 async function createContractViaForm(

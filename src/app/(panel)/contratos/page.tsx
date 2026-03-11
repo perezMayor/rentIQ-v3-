@@ -1,7 +1,8 @@
 // Página del módulo contratos.
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { getSessionUser } from "@/lib/auth";
+import { getSelectedBranchId, getSessionUser } from "@/lib/auth";
+import { formatDateTimeDisplay, formatMoneyDisplay } from "@/lib/formatting";
 import {
   addInternalExpense,
   changeContractVehicle,
@@ -15,6 +16,8 @@ import {
   listContracts,
   listClients,
   listFleetVehicles,
+  listVehicleCategories,
+  listTariffCatalog,
   listVehicleExtras,
   listTariffPlans,
   listReservations,
@@ -110,6 +113,7 @@ function toDateTimeLocal(value: string | null | undefined): string {
 export default async function ContratosPage({ searchParams }: Props) {
   const user = await getSessionUser();
   if (!user) redirect("/login");
+  const selectedBranchId = await getSelectedBranchId();
 
   const params = await searchParams;
   const requestedTab = normalizeTab((params.tab ?? "gestion").toLowerCase());
@@ -122,7 +126,7 @@ export default async function ContratosPage({ searchParams }: Props) {
   const from = params.from ?? range30.from;
   const to = params.to ?? range30.to;
   const status = (params.status ?? "TODOS").toUpperCase();
-  const branch = params.branch ?? "";
+  const branch = params.branch ?? selectedBranchId;
   const plate = params.plate ?? "";
   const customer = params.customer ?? "";
   const order = (params.order ?? "DESC").toUpperCase();
@@ -135,11 +139,11 @@ export default async function ContratosPage({ searchParams }: Props) {
   const auditContractId = params.auditContractId ?? "";
   const reportQ = params.reportQ ?? "";
   const reportStatus = (params.reportStatus ?? "TODOS").toUpperCase();
-  const reportBranch = params.reportBranch ?? "";
+  const reportBranch = params.reportBranch ?? selectedBranchId;
   const reportOrder = (params.reportOrder ?? "DESC").toUpperCase();
   const reportDateField = (params.reportDateField ?? "CREACION").toUpperCase();
 
-  const [contracts, reservations, fleet, settings, clients, tariffPlans, vehicleExtras] = await Promise.all([
+  const [contracts, reservations, fleet, settings, clients, tariffPlans, vehicleExtras, categories] = await Promise.all([
     listContracts(""),
     listReservations(""),
     listFleetVehicles(),
@@ -147,7 +151,35 @@ export default async function ContratosPage({ searchParams }: Props) {
     listClients("", "TODOS"),
     listTariffPlans(""),
     listVehicleExtras(),
+    listVehicleCategories(),
   ]);
+  const tariffCatalogs = await Promise.all(
+    tariffPlans.map(async (plan) => {
+      const catalog = await listTariffCatalog(plan.id);
+      return {
+        plan: {
+          id: catalog.plan?.id ?? plan.id,
+          code: catalog.plan?.code ?? plan.code,
+          validFrom: catalog.plan?.validFrom ?? plan.validFrom,
+          validTo: catalog.plan?.validTo ?? plan.validTo,
+          updatedAt: catalog.plan?.updatedAt ?? plan.updatedAt,
+          courtesyHours: catalog.plan?.courtesyHours ?? plan.courtesyHours,
+        },
+        brackets: catalog.brackets.map((item) => ({
+          id: item.id,
+          fromDay: item.fromDay,
+          toDay: item.toDay,
+          order: item.order,
+          label: item.label,
+        })),
+        prices: catalog.prices.map((item) => ({
+          bracketId: item.bracketId,
+          groupCode: item.groupCode,
+          price: item.price,
+        })),
+      };
+    }),
+  );
 
   const loadedContractByNumber = contractNumber ? await getContractByNumber(contractNumber) : null;
   const loadedContractById = contractId ? contracts.find((item) => item.id === contractId) ?? null : null;
@@ -599,9 +631,28 @@ export default async function ContratosPage({ searchParams }: Props) {
                 vehicles={fleet.map((vehicle) => ({
                   plate: vehicle.plate,
                   groupLabel: vehicle.categoryLabel.split(" - ")[0] || vehicle.categoryLabel,
+                  activeUntil: vehicle.activeUntil ?? "",
                 }))}
+                reservations={reservations.map((reservation) => ({
+                  assignedPlate: reservation.assignedPlate,
+                  deliveryAt: reservation.deliveryAt,
+                  pickupAt: reservation.pickupAt,
+                }))}
+                contracts={contracts
+                  .filter((item) => item.id !== loadedContract?.id)
+                  .map((item) => ({
+                    vehiclePlate: item.vehiclePlate,
+                    deliveryAt: item.deliveryAt,
+                    pickupAt: item.pickupAt,
+                  }))}
                 tariffOptions={tariffPlans.map((plan) => ({ id: plan.id, code: plan.code, title: plan.title }))}
+                tariffCatalogs={tariffCatalogs}
                 salesChannels={settings.salesChannels ?? []}
+                branches={settings.branches ?? []}
+                defaultBranchCode={settings.branches.some((branch) => branch.code === selectedBranchId) ? selectedBranchId : (settings.branches[0]?.code ?? "")}
+                courtesyHours={settings.courtesyHours ?? 0}
+                allGroups={categories.map((category) => category.code || category.name).filter(Boolean)}
+                insuranceOptions={vehicleExtras.filter((item) => item.active && item.kind === "SEGURO")}
                 initialValues={
                   loadedContract
                     ? {
@@ -619,7 +670,7 @@ export default async function ContratosPage({ searchParams }: Props) {
                         assignedVehicleGroup:
                           fleet.find((vehicle) => vehicle.plate.toUpperCase() === loadedContract.vehiclePlate.toUpperCase())?.categoryLabel.split(" - ")[0] || "",
                         assignedPlate: loadedContract.vehiclePlate || "",
-                        appliedRate: loadedReservation?.appliedRate || "",
+                        appliedRate: loadedContract.appliedRate || loadedReservation?.appliedRate || "",
                         salesChannel: loadedReservation?.salesChannel || "",
                         totalPrice: String(loadedContract.totalSettlement || loadedReservation?.totalPrice || ""),
                         customerCommissioner: loadedReservation?.customerCommissioner || "",
@@ -628,15 +679,17 @@ export default async function ContratosPage({ searchParams }: Props) {
                         deductible: loadedContract.deductible || loadedReservation?.deductible || "",
                         depositAmount: String(loadedReservation?.depositAmount || 0),
                         paymentsMade: String(loadedContract.paymentsMade || loadedReservation?.paymentsMade || 0),
-                        fuelPolicy: loadedReservation?.fuelPolicy || "",
                         baseAmount: String(loadedContract.baseAmount || loadedReservation?.baseAmount || 0),
                         discountAmount: String(loadedContract.discountAmount || loadedReservation?.discountAmount || 0),
+                        discountBreakdown: loadedContract.discountBreakdown || loadedReservation?.discountBreakdown || "",
                         extrasAmount: String(loadedContract.extrasAmount || loadedReservation?.extrasAmount || 0),
                         fuelAmount: String(loadedContract.fuelAmount || loadedReservation?.fuelAmount || 0),
                         insuranceAmount: String(loadedContract.insuranceAmount || loadedReservation?.insuranceAmount || 0),
                         penaltiesAmount: String(loadedContract.penaltiesAmount || loadedReservation?.penaltiesAmount || 0),
                         extrasBreakdown: loadedReservation?.extrasBreakdown || "",
                         additionalDrivers: loadedReservation?.additionalDrivers || "",
+                        publicNotes: loadedReservation?.publicNotes || "",
+                        privateNotes: loadedReservation?.privateNotes || "",
                       }
                     : undefined
                 }
@@ -648,6 +701,10 @@ export default async function ContratosPage({ searchParams }: Props) {
                   lastName: client.lastName,
                   companyName: client.companyName,
                   commissionerName: client.commissionerName,
+                  documentNumber: client.documentNumber,
+                  licenseNumber: client.licenseNumber,
+                  email: client.email,
+                  phone1: client.phone1,
                   acquisitionChannel: client.acquisitionChannel,
                 }))}
                 extraOptions={vehicleExtras.filter((item) => item.active)}
@@ -659,7 +716,7 @@ export default async function ContratosPage({ searchParams }: Props) {
             <section className="card stack-sm">
               <div className="table-header-row">
                 <h3>{loadedContract.contractNumber}</h3>
-                <a className="secondary-btn text-center" href={`/api/contratos/${loadedContract.id}/pdf`}>Imprimir contrato</a>
+                <a className="primary-btn text-center" href={`/api/contratos/${loadedContract.id}/pdf`} download>Imprimir contrato</a>
               </div>
               <p className="muted-text">{loadedContract.customerName} | {loadedContract.vehiclePlate || "Sin matrícula"} | {loadedContract.deliveryAt} → {loadedContract.pickupAt}</p>
               {loadedDetail?.invoice ? (
@@ -794,13 +851,13 @@ export default async function ContratosPage({ searchParams }: Props) {
                       <td>{contract.customerName}</td>
                       <td>{contract.branchCode}</td>
                       <td>{contract.vehiclePlate || "N/D"}</td>
-                      <td>{contract.deliveryAt}</td>
-                      <td>{contract.pickupAt}</td>
+                      <td>{formatDateTimeDisplay(contract.deliveryAt)}</td>
+                      <td>{formatDateTimeDisplay(contract.pickupAt)}</td>
                       <td>{contract.status}</td>
-                      <td>{contract.totalSettlement.toFixed(2)}</td>
+                      <td>{formatMoneyDisplay(contract.totalSettlement)}</td>
                       <td className="inline-actions-cell">
                         <a className="secondary-btn text-center" href={`/contratos?tab=gestion&contractId=${contract.id}`}>Abrir</a>
-                        <a className="secondary-btn text-center" href={`/api/contratos/${contract.id}/pdf`}>Imprimir</a>
+                        <a className="primary-btn text-center" href={`/api/contratos/${contract.id}/pdf`} download>Imprimir</a>
                         <a className="secondary-btn text-center" href={`/contratos?tab=historico&from=${from}&to=${to}&q=${encodeURIComponent(q)}&auditContractId=${contract.id}`}>Auditoría</a>
                         {canWrite ? (
                           <details>
@@ -846,7 +903,7 @@ export default async function ContratosPage({ searchParams }: Props) {
                     ) : (
                       auditItems.map((event, idx) => (
                         <tr key={`${event.timestamp}-${idx}`}>
-                          <td>{event.timestamp}</td>
+                          <td>{formatDateTimeDisplay(event.timestamp)}</td>
                           <td>{event.action}</td>
                           <td>{event.actorId}</td>
                           <td><code>{JSON.stringify(event.details ?? {})}</code></td>
@@ -890,10 +947,10 @@ export default async function ContratosPage({ searchParams }: Props) {
                       <td>{contract.vehiclePlate || "N/D"}</td>
                       <td>{contract.branchCode}</td>
                       <td>{contract.status}</td>
-                      <td>{contract.totalSettlement.toFixed(2)}</td>
+                      <td>{formatMoneyDisplay(contract.totalSettlement)}</td>
                       <td className="inline-actions-cell">
                         <a className="secondary-btn text-center" href={`/contratos?tab=gestion&contractId=${contract.id}&contractNumber=${encodeURIComponent(contract.contractNumber)}`}>Abrir gestión</a>
-                        <a className="secondary-btn text-center" href={`/api/contratos/${contract.id}/pdf`}>Imprimir</a>
+                        <a className="primary-btn text-center" href={`/api/contratos/${contract.id}/pdf`} download>Imprimir</a>
                         <a className="secondary-btn text-center" href={`/contratos?tab=historico&auditContractId=${contract.id}`}>Auditoría</a>
                         <a className="secondary-btn text-center" href={`/contratos?tab=cambio&changeContractId=${contract.id}`}>Cambio vehículo</a>
                         {contract.status === "ABIERTO" ? (
@@ -929,7 +986,7 @@ export default async function ContratosPage({ searchParams }: Props) {
           {selectedChangeContract ? (
             <p className="muted-text">
               Contrato: {selectedChangeContract.contractNumber} | Matrícula actual: {selectedChangeContract.vehiclePlate || "N/D"} |
-              Entrega: {selectedChangeContract.deliveryAt}
+              Entrega: {formatDateTimeDisplay(selectedChangeContract.deliveryAt)}
             </p>
           ) : null}
           <form action={changeVehicleByNumberAction} className="mini-form">
@@ -1036,8 +1093,8 @@ export default async function ContratosPage({ searchParams }: Props) {
                       <td>{contract.contractNumber}</td>
                       <td>{contract.customerName}</td>
                       <td>{contract.billedCarGroup}</td>
-                      <td>{contract.deliveryAt}</td>
-                      <td>{contract.pickupAt}</td>
+                      <td>{formatDateTimeDisplay(contract.deliveryAt)}</td>
+                      <td>{formatDateTimeDisplay(contract.pickupAt)}</td>
                       <td>
                         <form action={assignPlateToContractAction} className="mini-form">
                           <input type="hidden" name="contractId" value={contract.id} />
@@ -1091,10 +1148,10 @@ export default async function ContratosPage({ searchParams }: Props) {
               className="secondary-btn text-center"
               href={`/api/reporting/contratos/export?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&q=${encodeURIComponent(reportQ)}&status=${encodeURIComponent(reportStatus)}&branch=${encodeURIComponent(reportBranch)}&dateField=${encodeURIComponent(reportDateField)}&order=${encodeURIComponent(reportOrder)}`}
             >
-              Exportar CSV
+              Exportar PDF
             </a>
           </form>
-          <p className="muted-text">Contratos en rango: {reportContracts.length} | Importe total: {reportTotal.toFixed(2)}</p>
+          <p className="muted-text">Contratos en rango: {reportContracts.length} | Importe total: {formatMoneyDisplay(reportTotal)}</p>
           <div className="table-wrap">
             <table className="data-table">
               <thead><tr><th>Contrato</th><th>Cliente</th><th>Entrega</th><th>Recogida</th><th>Estado</th><th>Total</th><th>Acciones</th></tr></thead>
@@ -1106,13 +1163,13 @@ export default async function ContratosPage({ searchParams }: Props) {
                     <tr key={contract.id}>
                       <td>{contract.contractNumber}</td>
                       <td>{contract.customerName}</td>
-                      <td>{contract.deliveryAt}</td>
-                      <td>{contract.pickupAt}</td>
+                      <td>{formatDateTimeDisplay(contract.deliveryAt)}</td>
+                      <td>{formatDateTimeDisplay(contract.pickupAt)}</td>
                       <td>{contract.status}</td>
-                      <td>{contract.totalSettlement.toFixed(2)}</td>
+                      <td>{formatMoneyDisplay(contract.totalSettlement)}</td>
                       <td className="inline-actions-cell">
                         <a className="secondary-btn text-center" href={`/contratos?tab=gestion&contractId=${contract.id}`}>Abrir</a>
-                        <a className="secondary-btn text-center" href={`/api/contratos/${contract.id}/pdf`}>Imprimir</a>
+                        <a className="primary-btn text-center" href={`/api/contratos/${contract.id}/pdf`} download>Imprimir</a>
                       </td>
                     </tr>
                   ))

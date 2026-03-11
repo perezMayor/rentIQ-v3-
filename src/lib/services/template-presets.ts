@@ -1,12 +1,16 @@
 // Servicio de negocio para template presets.
-import { getReservationBaseTemplate } from "@/lib/services/template-renderer";
+import { getBudgetBaseTemplate, getReservationBaseTemplate } from "@/lib/services/template-renderer";
 
-type TemplateType = "CONTRATO" | "CONFIRMACION_RESERVA" | "FACTURA";
+type TemplateType = "CONTRATO" | "CONFIRMACION_RESERVA" | "PRESUPUESTO" | "FACTURA";
 
 export function getTemplatePresetHtml(templateType: TemplateType, language: string): string {
   const lang = language.toLowerCase();
   if (templateType === "CONFIRMACION_RESERVA") {
     return getReservationBaseTemplate(lang);
+  }
+
+  if (templateType === "PRESUPUESTO") {
+    return getBudgetBaseTemplate(lang);
   }
 
   if (templateType === "FACTURA") {

@@ -1,5 +1,3 @@
-import { redirect } from "next/navigation";
-
 export function isNextRedirectError(error: unknown): boolean {
   return (
     typeof error === "object" &&
@@ -16,16 +14,3 @@ export function getActionErrorMessage(error: unknown, fallback: string): string 
   }
   return error instanceof Error ? error.message : fallback;
 }
-
-export function redirectWithActionError(input: {
-  basePath: string;
-  params?: Record<string, string>;
-  error: unknown;
-  fallback: string;
-}): never {
-  const query = new URLSearchParams(input.params ?? {});
-  query.set("error", getActionErrorMessage(input.error, input.fallback));
-  const path = query.toString() ? `${input.basePath}?${query.toString()}` : `${input.basePath}?error=${encodeURIComponent(input.fallback)}`;
-  redirect(path);
-}
-

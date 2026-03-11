@@ -1,5 +1,5 @@
 import PDFDocument from "pdfkit";
-import { ensurePdfkitFontCompat } from "@/lib/pdfkit-compat";
+import { applyPdfkitFontFallback, ensurePdfkitFontCompat } from "@/lib/pdfkit-compat";
 
 type PdfSection = {
   title: string;
@@ -21,6 +21,7 @@ export async function buildSimplePdf(input: {
   return new Promise((resolve, reject) => {
     ensurePdfkitFontCompat();
     const doc = new PDFDocument({ margin: 40, size: "A4" });
+    applyPdfkitFontFallback(doc);
     const chunks: Buffer[] = [];
 
     doc.on("data", (chunk) => chunks.push(chunk as Buffer));

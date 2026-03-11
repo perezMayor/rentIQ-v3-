@@ -1,13 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-
-async function loginAdmin(page: Page) {
-  await page.goto("/login");
-  await page.selectOption("select[name='branch']", "principal");
-  await page.fill("input[name='email']", "admin@rentiq.local");
-  await page.fill("input[name='password']", "Admin#2026");
-  await page.click("button[type='submit']");
-  await expect(page).toHaveURL(/\/dashboard/, { timeout: 30_000 });
-}
+import { loginAdmin } from "./helpers";
 
 async function createManualInvoice(page: Page, invoiceType: "F" | "V" | "R" | "A") {
   await page.goto(`/facturacion?tab=crear-factura&invoiceType=${invoiceType}`);

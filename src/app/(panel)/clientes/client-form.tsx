@@ -126,7 +126,7 @@ export function ClientForm({ action, deactivateAction, canWrite, nextClientCode,
               </label>
 
               <label>
-                Carné de conducir *
+                Permiso de conducir *
                 <input name="licenseNumber" value={licenseNumber ?? ""} onChange={(e) => setLicenseNumber(e.target.value)} required disabled={!canWrite} />
               </label>
               <div aria-hidden="true" />

@@ -3,14 +3,17 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { appendAuditEvent } from "@/lib/audit";
 import { getSessionUser } from "@/lib/auth";
+import { getActionErrorMessage } from "@/lib/action-errors";
 import {
   createTariffPlan,
   deleteTariffBracket,
   deleteTariffPlan,
+  getCompanySettings,
   importTariffCatalogFromCsv,
   listVehicleCategories,
   listTariffCatalog,
   listTariffPlans,
+  updateCompanySettings,
   updateTariffPlan,
   upsertTariffBracket,
   upsertTariffPrice,
@@ -41,6 +44,7 @@ export default async function TarifasPage({ searchParams }: Props) {
   const params = await searchParams;
   const q = params.q ?? "";
   const plans = await listTariffPlans(q);
+  const settings = await getCompanySettings();
   const vehicleCategories = await listVehicleCategories();
   const tariffPlanId = params.tariffPlanId ?? plans[0]?.id ?? "";
   const catalog = tariffPlanId ? await listTariffCatalog(tariffPlanId) : { plan: null, brackets: [], groups: [], prices: [] };
@@ -103,10 +107,24 @@ export default async function TarifasPage({ searchParams }: Props) {
       }
       revalidatePath("/tarifas");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error creando tarifa";
+      const message = getActionErrorMessage(error, "Error creando tarifa");
       redirect(`/tarifas?error=${encodeURIComponent(message)}`);
     }
     redirect("/tarifas");
+  }
+
+  async function saveCourtesyHoursAction(formData: FormData) {
+    "use server";
+    const actor = await getSessionUser();
+    if (!actor) redirect("/login");
+    try {
+      await updateCompanySettings({ courtesyHours: String(formData.get("courtesyHours") ?? "0") }, { id: actor.id, role: actor.role });
+      revalidatePath("/tarifas");
+    } catch (error) {
+      const message = getActionErrorMessage(error, "Error guardando horas de cortesía");
+      redirect(`/tarifas?error=${encodeURIComponent(message)}`);
+    }
+    redirect("/tarifas?ok=Horas+de+cortesia+guardadas");
   }
 
   async function saveBracketAction(formData: FormData) {
@@ -118,7 +136,7 @@ export default async function TarifasPage({ searchParams }: Props) {
       await upsertTariffBracket(input, { id: actor.id, role: actor.role });
       revalidatePath("/tarifas");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error guardando tramo";
+      const message = getActionErrorMessage(error, "Error guardando tramo");
       redirect(`/tarifas?tariffPlanId=${encodeURIComponent(input.tariffPlanId ?? "")}&error=${encodeURIComponent(message)}`);
     }
     redirect(`/tarifas?tariffPlanId=${encodeURIComponent(input.tariffPlanId)}`);
@@ -150,7 +168,7 @@ export default async function TarifasPage({ searchParams }: Props) {
       }
       revalidatePath("/tarifas");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error guardando tabla";
+      const message = getActionErrorMessage(error, "Error guardando tabla");
       redirect(`/tarifas?tariffPlanId=${encodeURIComponent(planId)}&error=${encodeURIComponent(message)}`);
     }
     redirect(`/tarifas?tariffPlanId=${encodeURIComponent(planId)}`);
@@ -174,7 +192,7 @@ export default async function TarifasPage({ searchParams }: Props) {
       revalidatePath("/tarifas");
       okMessage = `Importación OK: filas ${result.rows}, planes +${result.plansCreated}/${result.plansUpdated} act., tramos +${result.bracketsCreated}/${result.bracketsUpdated} act., precios +${result.pricesCreated}/${result.pricesUpdated} act.`;
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error importando tarifas";
+      const message = getActionErrorMessage(error, "Error importando tarifas");
       redirect(`/tarifas?error=${encodeURIComponent(message)}`);
     }
     redirect(`/tarifas?ok=${encodeURIComponent(okMessage)}`);
@@ -190,7 +208,7 @@ export default async function TarifasPage({ searchParams }: Props) {
       await updateTariffPlan(planId, input, { id: actor.id, role: actor.role });
       revalidatePath("/tarifas");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error actualizando tarifa";
+      const message = getActionErrorMessage(error, "Error actualizando tarifa");
       redirect(`/tarifas?tariffPlanId=${encodeURIComponent(planId)}&error=${encodeURIComponent(message)}`);
     }
     redirect(`/tarifas?tariffPlanId=${encodeURIComponent(planId)}`);
@@ -205,7 +223,7 @@ export default async function TarifasPage({ searchParams }: Props) {
       await deleteTariffPlan(planId, { id: actor.id, role: actor.role });
       revalidatePath("/tarifas");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error borrando tarifa";
+      const message = getActionErrorMessage(error, "Error borrando tarifa");
       redirect(`/tarifas?tariffPlanId=${encodeURIComponent(planId)}&error=${encodeURIComponent(message)}`);
     }
     redirect("/tarifas");
@@ -221,7 +239,7 @@ export default async function TarifasPage({ searchParams }: Props) {
       await deleteTariffBracket(bracketId, { id: actor.id, role: actor.role });
       revalidatePath("/tarifas");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Error borrando tramo";
+      const message = getActionErrorMessage(error, "Error borrando tramo");
       redirect(`/tarifas?tariffPlanId=${encodeURIComponent(planId)}&error=${encodeURIComponent(message)}`);
     }
     redirect(`/tarifas?tariffPlanId=${encodeURIComponent(planId)}`);
@@ -425,6 +443,27 @@ export default async function TarifasPage({ searchParams }: Props) {
           </section>
         </>
       ) : null}
+
+      <section className="card stack-sm">
+        <h3>Horas de cortesía</h3>
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 320px) minmax(0, 1fr)", gap: "0.9rem", alignItems: "stretch" }}>
+          <form action={saveCourtesyHoursAction} className="inline-search" style={{ alignItems: "center", margin: 0 }}>
+            <input name="courtesyHours" type="number" min={0} step="1" defaultValue={String(settings.courtesyHours ?? 0)} style={{ maxWidth: 96 }} />
+            <button className="secondary-btn" type="submit">Guardar</button>
+          </form>
+          <div className="card-muted" style={{ padding: "0.85rem 1rem", display: "grid", gap: "0.45rem" }}>
+            <div className="table-header-row" style={{ justifyContent: "space-between", alignItems: "center", marginBottom: 0 }}>
+              <strong>Aplicación global</strong>
+              <strong>{settings.courtesyHours ?? 0} h</strong>
+            </div>
+            <div className="table-header-row" style={{ justifyContent: "space-between", gap: "1rem", flexWrap: "wrap", marginBottom: 0 }}>
+              <span className="muted-text">Todas las tarifas</span>
+              <span className="muted-text">Bloques de 24h</span>
+              <span className="muted-text">Exceso &gt; cortesía = +1 día</span>
+            </div>
+          </div>
+        </div>
+      </section>
 
       <section className="card stack-sm">
         <h3>Importación por archivo (CSV estándar)</h3>

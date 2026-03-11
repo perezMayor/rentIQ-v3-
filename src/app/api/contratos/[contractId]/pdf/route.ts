@@ -3,6 +3,8 @@ import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { buildContractDocument } from "@/lib/services/contract-document-service";
 
+export const dynamic = "force-dynamic";
+
 export async function GET(_: Request, context: { params: Promise<{ contractId: string }> }) {
   const user = await getSessionUser();
   if (!user) {
@@ -13,11 +15,12 @@ export async function GET(_: Request, context: { params: Promise<{ contractId: s
 
   try {
     const document = await buildContractDocument(contractId);
-    return new NextResponse(new Uint8Array(document.pdfBuffer), {
+    return new Response(document.pdfBuffer, {
       status: 200,
       headers: {
         "Content-Type": "application/pdf",
         "Content-Disposition": `attachment; filename=\"${document.contract.contractNumber}.pdf\"`,
+        "Content-Length": String(document.pdfBuffer.length),
         "Cache-Control": "no-store, no-cache, must-revalidate",
         Pragma: "no-cache",
         Expires: "0",
