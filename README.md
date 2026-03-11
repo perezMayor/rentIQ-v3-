@@ -1,6 +1,6 @@
 # RentIQ Gestión V3
 
-Aplicación independiente de la V2.
+Aplicación de gestioón para RAC
 
 ## Aislamiento aplicado
 - Puerto fijo V3: `3203`
